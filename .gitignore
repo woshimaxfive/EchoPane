@@ -10,6 +10,7 @@
 Thumbs.db
 Desktop.ini
 .DS_Store
+*.iml
 
 # Credentials
 .env
@@ -29,3 +30,10 @@ __pycache__/
 # Local models and caches
 /models/
 /.cache/
+
+# Flutter generated files
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+**/flutter/ephemeral/
