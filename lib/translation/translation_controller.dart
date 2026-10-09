@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
-import '../ocr/ocr_controller.dart';
+import '../subtitles/caption_source.dart';
 import 'provider.dart';
 import 'settings.dart';
 
@@ -11,15 +11,15 @@ enum TranslationPhase { off, waiting, translating, ready, failed }
 
 class TranslationController extends ChangeNotifier {
   TranslationController(
-    this.ocr,
+    this.source,
     this.provider,
     this.store,
     this.credentials, {
     this.debounce = const Duration(milliseconds: 350),
   }) {
-    ocr.addListener(_ocrChanged);
+    source.addListener(_sourceChanged);
   }
-  final OcrController ocr;
+  final CaptionSource source;
   final TranslationProvider provider;
   final SettingsStore store;
   final CredentialStore credentials;
@@ -37,6 +37,7 @@ class TranslationController extends ChangeNotifier {
   String _key = '';
   int _generation = 0;
   String _signature = '';
+  String _session = '';
   bool _disposed = false;
   bool _queued = false;
   Timer? _timer;
@@ -60,7 +61,7 @@ class TranslationController extends ChangeNotifier {
     }
     if (_disposed) return;
     initialized = true;
-    _ocrChanged();
+    _sourceChanged();
     _notify();
   }
 
@@ -144,7 +145,7 @@ class TranslationController extends ChangeNotifier {
     _invalidate();
     enabled = value && canTranslate;
     phase = enabled ? TranslationPhase.waiting : TranslationPhase.off;
-    originals = ocr.lines.map((line) => line.text).toList();
+    originals = source.captionRunning ? source.captionLines : [];
     _signature = _fingerprint(originals);
     if (enabled) _schedule();
     _notify();
@@ -154,19 +155,21 @@ class TranslationController extends ChangeNotifier {
     values.map((line) => line.trim().replaceAll(RegExp(r'\s+'), ' ')).toList(),
   );
 
-  void _ocrChanged() {
+  void _sourceChanged() {
     if (_disposed) return;
-    final next = ocr.capture.running
-        ? ocr.lines.map((line) => line.text).toList()
-        : <String>[];
+    final next = source.captionRunning ? source.captionLines : <String>[];
     final signature = _fingerprint(next);
-    if (signature == _signature) return;
+    final session =
+        '${source.captionSession}:${source.captionRunning}:${source.captionError}';
+    if (signature == _signature && session == _session) return;
+    if (session != _session) _cache.clear();
+    _session = session;
     _invalidate();
     originals = next;
     _signature = signature;
-    if (!ocr.capture.running) _cache.clear();
+    if (!source.captionRunning) _cache.clear();
     phase = enabled ? TranslationPhase.waiting : TranslationPhase.off;
-    if (enabled && ocr.error == null) _schedule();
+    if (enabled && source.captionError == null) _schedule();
     _notify();
   }
 
@@ -184,8 +187,8 @@ class TranslationController extends ChangeNotifier {
   bool get _eligible =>
       !_disposed &&
       enabled &&
-      ocr.capture.running &&
-      ocr.error == null &&
+      source.captionRunning &&
+      source.captionError == null &&
       originals.isNotEmpty;
   void _schedule() {
     if (!_eligible) return;
@@ -262,7 +265,7 @@ class TranslationController extends ChangeNotifier {
     cancelTest();
     _key = '';
     _cache.clear();
-    ocr.removeListener(_ocrChanged);
+    source.removeListener(_sourceChanged);
     super.dispose();
   }
 }

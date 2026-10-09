@@ -35,3 +35,13 @@ flutter test integration_test/windows_translation_test.dart -d windows --dart-de
 ```
 
 Create the result directory before running. Artifacts contain fixture text and a rendered application screenshot; use non-sensitive fixtures. This suite presents each image in a real Win32 window, captures it through the application's screen pipeline, then checks recognition updates, static-frame reuse, stopped-session results, and minimum window size. It also records timings and confidence values. Assertions cover selected text and lifecycle behavior; they do not establish general OCR accuracy or video performance. The app is moved over the fixture during the test to exercise self-window exclusion.
+
+## Audio regression
+
+The audio suite uses real multilingual Whisper inference and WASAPI loopback. It also injects a translation fixture to check source routing and bilingual overlay alignment; this does not validate a cloud service. Production credentials and settings are not modified. Install the speech models from the app first. Provide `en.f32` and `ja.f32`: little-endian float32 mono PCM at 16 kHz, amplitude within [-1, 1], maximum 30 seconds. Use non-sensitive speech samples with English “gold” and Japanese “中学”. The fixtures are not shipped by this repository; obtain appropriately licensed samples for local testing.
+
+The suite audibly plays the English fixture on the default playback endpoint, then recognizes the device's actual loopback. Use a quiet desktop and an available speaker/headphone. It checks silent input, stop/start invalidation, simulated reroute/disconnect notifications, model language detection, subtitle reuse and minimum window size. Add `--dart-define=ECHO_VERIFY_AUDIO_DOWNLOAD=true` to verify real model downloads into an isolated temporary directory. Model timings and keywords do not establish general transcription accuracy or long-session performance.
+
+```powershell
+flutter test integration_test/windows_audio_test.dart -d windows --dart-define=ECHO_AUDIO_FIXTURES=C:/audio-fixtures --dart-define=ECHO_TEST_ARTIFACTS=C:/audio-fixtures/results
+```

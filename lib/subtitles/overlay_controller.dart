@@ -4,19 +4,19 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
-import '../ocr/ocr_controller.dart';
+import 'caption_source.dart';
 import '../translation/translation_controller.dart';
 import 'overlay_platform.dart';
 import 'overlay_renderer.dart';
 import 'overlay_settings.dart';
 
 class OverlayController extends ChangeNotifier {
-  OverlayController(this.ocr, this.translation, this.platform, this.store) {
-    ocr.addListener(_changed);
+  OverlayController(this.source, this.translation, this.platform, this.store) {
+    source.addListener(_changed);
     translation.addListener(_changed);
     platform.listen(_windowChanged);
   }
-  final OcrController ocr;
+  final CaptionSource source;
   final TranslationController translation;
   final OverlayPlatform platform;
   final OverlaySettingsStore store;
@@ -31,17 +31,17 @@ class OverlayController extends ChangeNotifier {
   int _generation = 0;
   String _signature = '';
   List<String> get originals =>
-      ocr.capture.running ? ocr.lines.map((line) => line.text).toList() : [];
+      source.captionRunning ? source.captionLines : [];
   List<String> get translations =>
-      ocr.capture.running &&
+      source.captionRunning &&
           translation.enabled &&
           listEquals(translation.originals, originals)
       ? translation.translations
       : [];
-  String get status => !ocr.capture.running
+  String get status => !source.captionRunning
       ? '开始识别后，字幕会显示在这里'
-      : ocr.error != null
-      ? '文字识别暂不可用，请在主窗口检查'
+      : source.captionError != null
+      ? '识别暂不可用，请在主窗口检查'
       : settings.mode == SubtitleMode.translated &&
             translations.isEmpty &&
             originals.isNotEmpty
@@ -50,7 +50,7 @@ class OverlayController extends ChangeNotifier {
             : translation.enabled
             ? '正在等待译文…'
             : '请在主窗口开启翻译，或切换为原文'
-      : '等待画面中的文字…';
+      : source.waitingCaption;
 
   Future<void> initialize() async {
     try {
@@ -74,7 +74,7 @@ class OverlayController extends ChangeNotifier {
         visible: visible,
         locked: visible && !restore && (locked ?? window.locked),
         restore: restore || (visible && !window.visible),
-        displayId: ocr.capture.display?.id,
+        displayId: source.captionDisplayId,
       );
       if (_disposed) return;
       _windowChanged(next);
@@ -182,7 +182,7 @@ class OverlayController extends ChangeNotifier {
     _disposed = true;
     ++_generation;
     platform.listen(null);
-    ocr.removeListener(_changed);
+    source.removeListener(_changed);
     translation.removeListener(_changed);
     super.dispose();
   }

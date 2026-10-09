@@ -2081,3 +2081,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 - PaddleOCR PP-OCRv5 mobile detection/recognition models and dictionary: Apache-2.0. RapidAI ONNX conversion is also Apache-2.0. Models are fetched separately; see MODEL_NOTICES.md and `third_party/licenses/`.
 
 Windows bundles include these license files in `licenses/`, together with this notice and the project LICENSE. The OS-provided Windows/Direct3D APIs remain subject to the platform's terms.
+
+## Native audio recognition
+
+- **miniaudio**: [mackron/miniaudio](https://github.com/mackron/miniaudio), pinned to `1df46ae9a0eed5aa9f58b179d2cc4af5d23f8bde` (upstream WAV decoder fix). EchoPane chooses the MIT option of the dual license. See `third_party/licenses/miniaudio-LICENSE.txt`. File decoding and encoding are disabled; only the WASAPI device backend is enabled.
+- **whisper.cpp and ggml**: [ggml-org/whisper.cpp v1.9.4](https://github.com/ggml-org/whisper.cpp/tree/v1.9.4), MIT. Local CPU inference with packaged runtime-selected CPU backends. See `third_party/licenses/whisper.cpp-LICENSE.txt`.
+- **OpenAI Whisper weights**: MIT, see `third_party/licenses/Whisper-LICENSE.txt` and [MODEL_NOTICES.md](MODEL_NOTICES.md).
+- **Silero VAD weights**: MIT, see `third_party/licenses/Silero-VAD-LICENSE.txt` and [MODEL_NOTICES.md](MODEL_NOTICES.md).
+
+Native dependency downloads have fixed SHA-256 values in `windows/runner/audio_dependencies.cmake`. Model files are downloaded separately on user request and are not part of the source repository or application bundle.

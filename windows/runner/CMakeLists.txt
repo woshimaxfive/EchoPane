@@ -12,6 +12,7 @@ add_executable(${BINARY_NAME} WIN32
   "ocr_service.cpp"
   "credential_store.cpp"
   "subtitle_overlay.cpp"
+  "audio_service.cpp"
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"
@@ -44,6 +45,8 @@ target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE d3d11 dxgi windowsapp)
 target_link_libraries(${BINARY_NAME} PRIVATE advapi32 gdi32)
 include(ocr_dependencies.cmake)
+include(audio_dependencies.cmake)
+target_link_libraries(${BINARY_NAME} PRIVATE echopane_audio)
 target_link_libraries(${BINARY_NAME} PRIVATE echopane_rapidocr)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 

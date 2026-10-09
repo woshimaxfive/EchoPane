@@ -15,6 +15,9 @@ import 'subtitles/overlay_controller.dart';
 import 'subtitles/overlay_dialog.dart';
 import 'subtitles/overlay_platform.dart';
 import 'subtitles/overlay_settings.dart';
+import 'subtitles/caption_source.dart';
+import 'audio/audio_controller.dart';
+import 'audio/audio_panel.dart';
 
 Future<void> main() => startApplication();
 
@@ -59,14 +62,16 @@ Future<void> startApplication({
   final controller = CaptureController(WindowsCapturePlatform());
   final models = OcrModelStore();
   final ocr = OcrController(controller, models, WindowsOcrPlatform());
+  final audio = AudioController(WindowsAudioPlatform());
+  final captions = CaptionRouter(ocr, audio);
   final translation = TranslationController(
-    ocr,
+    captions,
     translationProvider ?? const ChatTranslationProvider(),
     settingsStore ?? FileSettingsStore(),
     credentials ?? const WindowsCredentialStore(),
   );
   final overlay = OverlayController(
-    ocr,
+    captions,
     translation,
     overlayPlatform ?? WindowsOverlayPlatform(),
     overlaySettingsStore ?? FileOverlaySettingsStore(),
@@ -77,12 +82,15 @@ Future<void> startApplication({
       ocr: ocr,
       translation: translation,
       overlay: overlay,
+      audio: audio,
+      captions: captions,
     ),
   );
   await controller.initialize();
   await models.check();
   await translation.initialize();
   await overlay.initialize();
+  await audio.initialize();
 }
 
 class EchoPaneApp extends StatelessWidget {
@@ -92,11 +100,15 @@ class EchoPaneApp extends StatelessWidget {
     this.ocr,
     this.translation,
     this.overlay,
+    this.audio,
+    this.captions,
   });
   final CaptureController controller;
   final OcrController? ocr;
   final TranslationController? translation;
   final OverlayController? overlay;
+  final AudioController? audio;
+  final CaptionRouter? captions;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -117,6 +129,8 @@ class EchoPaneApp extends StatelessWidget {
         ocr: ocr,
         translation: translation,
         overlay: overlay,
+        audio: audio,
+        captions: captions,
       ),
     ),
   );
@@ -129,11 +143,15 @@ class CaptureWindow extends StatefulWidget {
     this.ocr,
     this.translation,
     this.overlay,
+    this.audio,
+    this.captions,
   });
   final CaptureController controller;
   final OcrController? ocr;
   final TranslationController? translation;
   final OverlayController? overlay;
+  final AudioController? audio;
+  final CaptionRouter? captions;
 
   @override
   State<CaptureWindow> createState() => _CaptureWindowState();
@@ -156,6 +174,7 @@ class _CaptureWindowState extends State<CaptureWindow>
   void onWindowClose() async {
     await widget.overlay?.close();
     await widget.controller.stop();
+    await widget.audio?.stop();
     await trayManager.destroy();
     await windowManager.destroy();
   }
@@ -184,6 +203,7 @@ class _CaptureWindowState extends State<CaptureWindow>
         onTrayIconMouseDown();
       case 'stop':
         widget.controller.stop();
+        widget.audio?.stop();
       case 'subtitles':
         widget.overlay?.show(true);
       case 'subtitle_restore':
@@ -212,7 +232,11 @@ class _CaptureWindowState extends State<CaptureWindow>
         child: Material(
           color: const Color(0xfff5f7fa).withValues(alpha: _opacity),
           child: AnimatedBuilder(
-            animation: widget.controller,
+            animation: Listenable.merge([
+              widget.controller,
+              widget.audio,
+              widget.captions,
+            ]),
             builder: (context, _) => _content(context, widget.controller),
           ),
         ),
@@ -294,15 +318,42 @@ class _CaptureWindowState extends State<CaptureWindow>
               children: [
                 Row(
                   children: [
-                    const Expanded(
-                      child: Text(
-                        '屏幕翻译',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xff243247),
-                        ),
-                      ),
+                    Expanded(
+                      child: widget.captions == null
+                          ? const Text(
+                              '屏幕翻译',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xff243247),
+                              ),
+                            )
+                          : DropdownButton<RecognitionMode>(
+                              key: const Key('recognition-mode'),
+                              value: widget.captions!.mode,
+                              underline: const SizedBox.shrink(),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: RecognitionMode.screen,
+                                  child: Text('屏幕翻译'),
+                                ),
+                                DropdownMenuItem(
+                                  value: RecognitionMode.audio,
+                                  child: Text('音频字幕'),
+                                ),
+                              ],
+                              onChanged: state.busy || widget.audio!.busy
+                                  ? null
+                                  : (value) async {
+                                      if (value == null ||
+                                          value == widget.captions!.mode) {
+                                        return;
+                                      }
+                                      await widget.controller.stop();
+                                      await widget.audio!.stop();
+                                      widget.captions!.select(value);
+                                    },
+                            ),
                     ),
                     if (widget.overlay != null)
                       TextButton.icon(
@@ -326,187 +377,199 @@ class _CaptureWindowState extends State<CaptureWindow>
                         label: const Text('翻译服务'),
                       ),
                     const SizedBox(width: 12),
-                    Icon(
-                      Icons.circle,
-                      size: 8,
-                      color: state.running
-                          ? const Color(0xff167c80)
-                          : const Color(0xff708196),
-                    ),
-                    const SizedBox(width: 7),
-                    Text(
-                      status,
-                      style: const TextStyle(color: Color(0xff708196)),
-                    ),
+                    if (widget.captions?.mode != RecognitionMode.audio)
+                      Icon(
+                        Icons.circle,
+                        size: 8,
+                        color: state.running
+                            ? const Color(0xff167c80)
+                            : const Color(0xff708196),
+                      ),
+                    if (widget.captions?.mode != RecognitionMode.audio)
+                      const SizedBox(width: 7),
+                    if (widget.captions?.mode != RecognitionMode.audio)
+                      Text(
+                        status,
+                        style: const TextStyle(color: Color(0xff708196)),
+                      ),
                   ],
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  '选择关注的画面，截图和文字识别都在本机处理。',
-                  style: TextStyle(color: Color(0xff708196)),
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButton<CaptureDisplay>(
-                        isExpanded: true,
-                        value: state.display,
-                        hint: const Text('正在读取显示器'),
-                        items: state.displays
-                            .map(
-                              (d) => DropdownMenuItem(
-                                value: d,
-                                child: Text(
-                                  '${d.name}  ${d.width} × ${d.height}',
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: state.busy
-                            ? null
-                            : (value) {
-                                if (value != null) state.chooseDisplay(value);
-                              },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    OutlinedButton.icon(
-                      onPressed: state.busy || state.display == null
-                          ? null
-                          : state.selectRegion,
-                      icon: const Icon(Icons.crop, size: 18),
-                      label: const Text('框选区域'),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton(
-                      onPressed: state.busy || state.display == null
-                          ? null
-                          : state.useFullDisplay,
-                      child: const Text('整块屏幕'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Expanded(
-                  flex: 2,
-                  child: Container(
-                    width: double.infinity,
-                    clipBehavior: Clip.antiAlias,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: _opacity),
-                      border: Border.all(color: const Color(0xffdae2e7)),
-                      borderRadius: BorderRadius.circular(9),
-                    ),
-                    child: state.textureId == null
-                        ? LayoutBuilder(
-                            builder: (context, constraints) {
-                              if (constraints.maxHeight < 160) {
-                                return Center(
-                                  child: Text(
-                                    state.error ?? '框选一个区域，或选择整块屏幕',
-                                    textAlign: TextAlign.center,
-                                  ),
-                                );
-                              }
-                              return Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(24),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(
-                                        Icons.crop_free,
-                                        size: 38,
-                                        color: Color(0xff708196),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      Text(
-                                        state.error ?? '框选一个区域，或选择整块屏幕',
-                                        textAlign: TextAlign.center,
-                                      ),
-                                      const SizedBox(height: 7),
-                                      const Text(
-                                        '点击开始后显示实时画面',
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          color: Color(0xff708196),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          )
-                        : Center(
-                            child: AspectRatio(
-                              aspectRatio:
-                                  (state.snapshot != null &&
-                                          state.snapshot!.width > 0
-                                      ? state.snapshot!.width
-                                      : state.region?.width ??
-                                            state.display!.width) /
-                                  (state.snapshot != null &&
-                                          state.snapshot!.height > 0
-                                      ? state.snapshot!.height
-                                      : state.region?.height ??
-                                            state.display!.height),
-                              child: Texture(textureId: state.textureId!),
-                            ),
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (widget.ocr != null) ...[
-                  const Divider(height: 1, color: Color(0xffdae2e7)),
+                if (widget.captions?.mode == RecognitionMode.audio)
                   Expanded(
-                    flex: 3,
-                    child: OcrPanel(
-                      controller: widget.ocr!,
+                    child: AudioPanel(
+                      controller: widget.audio!,
                       translation: widget.translation,
                     ),
+                  )
+                else ...[
+                  const Text(
+                    '选择关注的画面，截图和文字识别都在本机处理。',
+                    style: TextStyle(color: Color(0xff708196)),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButton<CaptureDisplay>(
+                          isExpanded: true,
+                          value: state.display,
+                          hint: const Text('正在读取显示器'),
+                          items: state.displays
+                              .map(
+                                (d) => DropdownMenuItem(
+                                  value: d,
+                                  child: Text(
+                                    '${d.name}  ${d.width} × ${d.height}',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: state.busy
+                              ? null
+                              : (value) {
+                                  if (value != null) state.chooseDisplay(value);
+                                },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      OutlinedButton.icon(
+                        onPressed: state.busy || state.display == null
+                            ? null
+                            : state.selectRegion,
+                        icon: const Icon(Icons.crop, size: 18),
+                        label: const Text('框选区域'),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        onPressed: state.busy || state.display == null
+                            ? null
+                            : state.useFullDisplay,
+                        child: const Text('整块屏幕'),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 10),
-                ],
-                Row(
-                  children: [
+                  Expanded(
+                    flex: 2,
+                    child: Container(
+                      width: double.infinity,
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: _opacity),
+                        border: Border.all(color: const Color(0xffdae2e7)),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: state.textureId == null
+                          ? LayoutBuilder(
+                              builder: (context, constraints) {
+                                if (constraints.maxHeight < 160) {
+                                  return Center(
+                                    child: Text(
+                                      state.error ?? '框选一个区域，或选择整块屏幕',
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  );
+                                }
+                                return Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(24),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          Icons.crop_free,
+                                          size: 38,
+                                          color: Color(0xff708196),
+                                        ),
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          state.error ?? '框选一个区域，或选择整块屏幕',
+                                          textAlign: TextAlign.center,
+                                        ),
+                                        const SizedBox(height: 7),
+                                        const Text(
+                                          '点击开始后显示实时画面',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Color(0xff708196),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                          : Center(
+                              child: AspectRatio(
+                                aspectRatio:
+                                    (state.snapshot != null &&
+                                            state.snapshot!.width > 0
+                                        ? state.snapshot!.width
+                                        : state.region?.width ??
+                                              state.display!.width) /
+                                    (state.snapshot != null &&
+                                            state.snapshot!.height > 0
+                                        ? state.snapshot!.height
+                                        : state.region?.height ??
+                                              state.display!.height),
+                                child: Texture(textureId: state.textureId!),
+                              ),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (widget.ocr != null) ...[
+                    const Divider(height: 1, color: Color(0xffdae2e7)),
                     Expanded(
-                      child: Text(
-                        state.region == null
-                            ? '范围：整块显示器'
-                            : '范围：${state.region!.width} × ${state.region!.height} 像素',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xff708196),
-                        ),
+                      flex: 3,
+                      child: OcrPanel(
+                        controller: widget.ocr!,
+                        translation: widget.translation,
                       ),
                     ),
-                    if (state.snapshot != null)
-                      Text(
-                        '已捕获 ${state.snapshot!.frames} 帧',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xff708196),
-                        ),
-                      ),
-                    const SizedBox(width: 14),
-                    FilledButton.icon(
-                      key: const Key('capture-toggle'),
-                      onPressed: state.busy || state.display == null
-                          ? null
-                          : state.running
-                          ? state.stop
-                          : state.start,
-                      icon: Icon(
-                        state.running ? Icons.stop : Icons.play_arrow,
-                        size: 19,
-                      ),
-                      label: Text(state.running ? '停止' : '开始'),
-                    ),
+                    const SizedBox(height: 10),
                   ],
-                ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          state.region == null
+                              ? '范围：整块显示器'
+                              : '范围：${state.region!.width} × ${state.region!.height} 像素',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xff708196),
+                          ),
+                        ),
+                      ),
+                      if (state.snapshot != null)
+                        Text(
+                          '已捕获 ${state.snapshot!.frames} 帧',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xff708196),
+                          ),
+                        ),
+                      const SizedBox(width: 14),
+                      FilledButton.icon(
+                        key: const Key('capture-toggle'),
+                        onPressed: state.busy || state.display == null
+                            ? null
+                            : state.running
+                            ? state.stop
+                            : state.start,
+                        icon: Icon(
+                          state.running ? Icons.stop : Icons.play_arrow,
+                          size: 19,
+                        ),
+                        label: Text(state.running ? '停止' : '开始'),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),

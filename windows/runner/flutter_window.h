@@ -10,6 +10,7 @@
 #include "screen_capture.h"
 #include "credential_store.h"
 #include "subtitle_overlay.h"
+#include "audio_service.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -34,6 +35,7 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<ScreenCapture> screen_capture_;
   std::unique_ptr<CredentialStore> credential_store_;
   std::unique_ptr<SubtitleOverlay> subtitle_overlay_;
+  std::unique_ptr<AudioService> audio_service_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

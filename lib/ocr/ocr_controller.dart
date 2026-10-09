@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../capture/capture_controller.dart';
 import '../capture/capture_platform.dart';
 import 'model_store.dart';
 import '../subtitles/caption_stabilizer.dart';
+import '../subtitles/caption_source.dart';
 
 class OcrLine {
   const OcrLine(this.text, this.confidence);
@@ -32,7 +32,7 @@ class WindowsOcrPlatform implements OcrPlatform {
       {};
 }
 
-class OcrController extends ChangeNotifier {
+class OcrController extends CaptionSource {
   OcrController(
     this.capture,
     this.models,
@@ -78,6 +78,18 @@ class OcrController extends ChangeNotifier {
   int _generation = 0;
   String get text => lines.map((line) => line.text).join('\n');
   bool get stabilizing => _stabilizer.pending;
+  @override
+  bool get captionRunning => capture.running;
+  @override
+  String? get captionError => error;
+  @override
+  List<String> get captionLines => lines.map((line) => line.text).toList();
+  @override
+  String get captionSession => '$_generation';
+  @override
+  int? get captionDisplayId => capture.display?.id;
+  @override
+  String get waitingCaption => '等待画面中的文字…';
 
   void _captureChanged() {
     if (capture.running != _wasRunning) {
