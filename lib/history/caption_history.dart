@@ -74,6 +74,7 @@ class CaptionHistory extends ChangeNotifier {
   int _characters = 0, _nextId = 0;
   int? _activeId;
   String? _signature;
+  final _confirmedSeen = <String>{};
   List<CaptionEntry> get entries => List.unmodifiable(_entries);
   int get length => _entries.length;
   int get characters => _characters;
@@ -83,6 +84,33 @@ class CaptionHistory extends ChangeNotifier {
   );
 
   void _changed() {
+    final confirmed = source.captionConfirmed;
+    if (confirmed != null) {
+      var changed = false;
+      for (final caption in confirmed) {
+        final signature = '${source.captionSession}:${caption.id}';
+        if (!_confirmedSeen.add(signature)) continue;
+        final entry = CaptionEntry(
+          id: ++_nextId,
+          receivedAt: _now(),
+          origin: _origin(),
+          originals: [caption.original],
+          translations: [caption.translation],
+          target: caption.target,
+        );
+        _entries.add(entry);
+        _characters += entry.characters;
+        changed = true;
+      }
+      while (_confirmedSeen.length > maxEntries + 256) {
+        _confirmedSeen.remove(_confirmedSeen.first);
+      }
+      _trim();
+      if (changed) notifyListeners();
+      _signature = null;
+      _activeId = null;
+      return;
+    }
     final lines = source.captionLines;
     if (!source.captionRunning ||
         source.captionError != null ||
@@ -128,6 +156,12 @@ class CaptionHistory extends ChangeNotifier {
         changed = true;
       }
     }
+    changed = _trim() || changed;
+    if (changed) notifyListeners();
+  }
+
+  bool _trim() {
+    var changed = false;
     while (_entries.length > maxEntries || _characters > maxCharacters) {
       final removed = _entries.removeAt(0);
       _characters -= removed.characters;
@@ -135,7 +169,7 @@ class CaptionHistory extends ChangeNotifier {
       dropped++;
       changed = true;
     }
-    if (changed) notifyListeners();
+    return changed;
   }
 
   void clear() {

@@ -21,6 +21,7 @@ Value Encode(const AudioState& state) {
     {Value("running"), Value(state.running)}, {Value("loading"), Value(state.loading)},
     {Value("recognizing"), Value(state.recognizing)}, {Value("error"), Value(state.error)},
     {Value("language"), Value(state.language)}, {Value("lines"), Value(lines)}, {Value("devices"), Value(devices)},
+    {Value("pcm"), Value(state.pcm)},
     {Value("session"), Value(state.session)}, {Value("revision"), Value(state.revision)},
     {Value("samples"), Value(state.samples)}, {Value("dropped"), Value(state.dropped)},
     {Value("durationMs"), Value(state.duration_ms)}, {Value("level"), Value(state.level)}});
@@ -38,6 +39,11 @@ AudioService::AudioService(flutter::FlutterEngine* engine) {
       if (name == "snapshot") { result->Success(Encode(audio_.Snapshot())); return; }
       if (name == "stop") { audio_.Stop(); result->Success(); return; }
       if (name == "refresh") { audio_.Refresh(); result->Success(); return; }
+      if (name == "startStream") {
+        const auto device = String(values, "device");
+        if (device.size() > 2048) throw std::runtime_error("arguments");
+        audio_.Start({}, device, "auto", true); result->Success(); return;
+      }
 #ifndef NDEBUG
       if (name == "debugReroute" || name == "debugDisconnect") {
         audio_.DeviceNotification(name == "debugDisconnect"); result->Success(); return;

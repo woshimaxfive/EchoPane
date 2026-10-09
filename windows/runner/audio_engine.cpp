@@ -59,6 +59,8 @@ struct AudioEngine::Impl {
   std::condition_variable wake;
   AudioState state;
   bool quit = false, start_pending = false, refresh_pending = true;
+  bool pending_stream = false, stream = false;
+  std::vector<uint8_t> stream_pcm;
   std::string directory, endpoint, pending_language, language, loaded_directory;
   std::vector<float> fixture;
   std::thread worker;
@@ -130,6 +132,7 @@ struct AudioEngine::Impl {
     if (device_ready) { ma_device_uninit(&device); device_ready = false; }
     read = 0; written = 0; level = 0; rerouted = false; interrupted = false;
     ClearSegment();
+    { std::lock_guard lock(mutex); stream_pcm.clear(); }
   }
   void Enumerate() {
     if (!context_ready) {
@@ -229,7 +232,7 @@ struct AudioEngine::Impl {
   void Run() {
     while (true) {
       try {
-        bool start = false, refresh = false;
+        bool start = false, refresh = false, next_stream = false;
         std::string next_directory, next_endpoint, next_language;
         std::vector<float> next_fixture;
         int64_t token = 0;
@@ -240,7 +243,7 @@ struct AudioEngine::Impl {
           if (quit) break;
           start = start_pending; refresh = refresh_pending;
           start_pending = refresh_pending = false;
-          if (start) { next_directory = directory; next_endpoint = endpoint; next_language = pending_language; next_fixture.swap(fixture); token = generation.load(); }
+          if (start) { next_directory = directory; next_endpoint = endpoint; next_language = pending_language; next_stream = pending_stream; next_fixture.swap(fixture); token = generation.load(); }
         }
         if (active_generation != generation.load()) { CloseDevice(); active_generation = generation.load(); }
         if (refresh || start) Enumerate();
@@ -249,7 +252,8 @@ struct AudioEngine::Impl {
           active_generation = token;
           CloseDevice(); captured = 0; dropped = 0;
           observed_drops = 0;
-          Load(next_directory);
+          stream = next_stream;
+          if (!stream) Load(next_directory);
           if (token != generation.load()) continue;
           language = next_language;
           if (!next_fixture.empty()) {
@@ -305,7 +309,16 @@ struct AudioEngine::Impl {
             std::array<float, 512> frame;
             for (size_t i = 0; i < 512; ++i) frame[i] = ring[(r + i) % kCapacity];
             read.store(r + 512, std::memory_order_release);
-            Frame(frame.data());
+            if (stream) {
+              std::lock_guard lock(mutex);
+              if (active_generation != generation.load()) continue;
+              if (stream_pcm.size() + frame.size() * 2 > 16000 * 2 * 2) throw std::runtime_error("stream_overflow");
+              for (float value : frame) {
+                const auto pcm = static_cast<int16_t>(std::lround(std::clamp(value, -1.0f, 1.0f) * 32767));
+                stream_pcm.push_back(static_cast<uint8_t>(pcm & 0xff));
+                stream_pcm.push_back(static_cast<uint8_t>((static_cast<uint16_t>(pcm) >> 8) & 0xff));
+              }
+            } else Frame(frame.data());
           } else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
       } catch (...) {
@@ -325,18 +338,21 @@ struct AudioEngine::Impl {
 
 AudioEngine::AudioEngine() : impl_(std::make_unique<Impl>()) {}
 AudioEngine::~AudioEngine() = default;
-void AudioEngine::Start(std::string directory, std::string device, std::string language) {
+void AudioEngine::Start(std::string directory, std::string device, std::string language, bool stream) {
   std::lock_guard lock(impl_->mutex);
   ++impl_->generation;
   impl_->directory = std::move(directory); impl_->endpoint = std::move(device); impl_->pending_language = std::move(language);
+  impl_->pending_stream = stream; impl_->stream_pcm.clear();
   impl_->fixture.clear(); impl_->start_pending = true;
   impl_->state.loading = true; impl_->state.running = impl_->state.recognizing = false;
   impl_->state.error.clear(); impl_->state.lines.clear(); ++impl_->state.session; ++impl_->state.revision;
+  impl_->state.duration_ms = 0; impl_->state.language.clear();
   impl_->wake.notify_one();
 }
 void AudioEngine::Stop() {
   std::lock_guard lock(impl_->mutex);
   ++impl_->generation; impl_->start_pending = false; impl_->fixture.clear();
+  impl_->stream_pcm.clear();
   impl_->state.running = impl_->state.loading = impl_->state.recognizing = false;
   impl_->state.lines.clear(); impl_->state.error.clear(); ++impl_->state.session; ++impl_->state.revision;
   impl_->wake.notify_one();
@@ -344,6 +360,7 @@ void AudioEngine::Stop() {
 void AudioEngine::Refresh() { std::lock_guard lock(impl_->mutex); impl_->refresh_pending = true; impl_->wake.notify_one(); }
 AudioState AudioEngine::Snapshot() {
   std::lock_guard lock(impl_->mutex); auto value = impl_->state;
+  value.pcm.swap(impl_->stream_pcm);
   value.samples = impl_->captured.load(); value.dropped = impl_->dropped.load(); value.level = impl_->level.load();
   return value;
 }
@@ -352,6 +369,7 @@ void AudioEngine::Fixture(std::string directory, std::string language, std::vect
   std::lock_guard lock(impl_->mutex);
   ++impl_->generation;
   impl_->directory = std::move(directory); impl_->endpoint.clear(); impl_->pending_language = std::move(language);
+  impl_->pending_stream = false;
   impl_->fixture = std::move(samples); impl_->start_pending = true;
   impl_->state.loading = true; impl_->state.running = impl_->state.recognizing = false;
   impl_->state.error.clear(); impl_->state.lines.clear(); ++impl_->state.session; ++impl_->state.revision;

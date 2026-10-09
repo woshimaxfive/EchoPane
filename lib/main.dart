@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
@@ -18,6 +20,8 @@ import 'subtitles/overlay_settings.dart';
 import 'subtitles/caption_source.dart';
 import 'audio/audio_controller.dart';
 import 'audio/audio_panel.dart';
+import 'audio/bailian_audio.dart';
+import 'audio/streaming_audio.dart';
 import 'history/caption_history.dart';
 import 'history/history_dialog.dart';
 import 'screen_translation/screen_controller.dart';
@@ -35,6 +39,8 @@ Future<void> startApplication({
   OverlaySettingsStore? overlaySettingsStore,
   ScreenOverlayPlatform? screenOverlayPlatform,
   ScreenOverlaySettingsStore? screenOverlaySettingsStore,
+  AudioPlatform? audioPlatform,
+  Future<AudioStreamSession> Function()? audioStreamFactory,
 }) async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
@@ -71,7 +77,7 @@ Future<void> startApplication({
   final controller = CaptureController(WindowsCapturePlatform());
   final models = OcrModelStore();
   final ocr = OcrController(controller, models, WindowsOcrPlatform());
-  final audio = AudioController(WindowsAudioPlatform());
+  final audio = AudioController(audioPlatform ?? WindowsAudioPlatform());
   final captions = CaptionRouter(ocr, audio);
   final translation = TranslationController(
     captions,
@@ -79,6 +85,33 @@ Future<void> startApplication({
     settingsStore ?? FileSettingsStore(),
     credentials ?? const WindowsCredentialStore(),
   );
+  audio.streamTarget = () => translation.settings.target;
+  audio.openStream =
+      audioStreamFactory ??
+      () async {
+        if (!translation.canTranslate) {
+          throw const AudioStreamFailure('请先在翻译设置中保存百炼北京配置和 Key');
+        }
+        final key = await translation.credentials.read() ?? '';
+        translation.setEnabled(true);
+        return BailianAudioSession(
+          translation.settings,
+          key,
+          source: audio.language,
+        );
+      };
+  var previousTranslationEnabled = translation.enabled;
+  void stopStreamOnSettingsChange() {
+    final switchedOff = previousTranslationEnabled && !translation.enabled;
+    previousTranslationEnabled = translation.enabled;
+    if (audio.isCloud &&
+        (audio.running || audio.starting) &&
+        (switchedOff || translation.saving)) {
+      unawaited(audio.stop());
+    }
+  }
+
+  translation.addListener(stopStreamOnSettingsChange);
   final overlay = OverlayController(
     captions,
     translation,

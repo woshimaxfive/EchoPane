@@ -161,7 +161,12 @@ class TranslationController extends ChangeNotifier {
     final signature = _fingerprint(next);
     final session =
         '${source.captionSession}:${source.captionRunning}:${source.captionError}';
-    if (signature == _signature && session == _session) return;
+    final direct = source.captionTranslations;
+    if (signature == _signature &&
+        session == _session &&
+        (direct == null || listEquals(direct, translations))) {
+      return;
+    }
     if (session != _session) _cache.clear();
     _session = session;
     _invalidate();
@@ -192,6 +197,14 @@ class TranslationController extends ChangeNotifier {
       originals.isNotEmpty;
   void _schedule() {
     if (!_eligible) return;
+    final direct = source.captionTranslations;
+    if (direct != null) {
+      translations = List.of(direct);
+      phase = direct.any((s) => s.isNotEmpty)
+          ? TranslationPhase.ready
+          : TranslationPhase.waiting;
+      return;
+    }
     final cached = _cache[_signature];
     if (cached != null) {
       translations = List.of(cached);

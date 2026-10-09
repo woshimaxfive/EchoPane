@@ -11,6 +11,13 @@ abstract class CaptionSource extends ChangeNotifier {
   int get captionRevision => 0;
   int? get captionDisplayId;
   String get waitingCaption;
+  List<String>? get captionTranslations => null;
+  List<ConfirmedCaption>? get captionConfirmed => null;
+}
+
+class ConfirmedCaption {
+  const ConfirmedCaption(this.id, this.original, this.translation, this.target);
+  final String id, original, translation, target;
 }
 
 enum RecognitionMode { screen, audio }
@@ -46,6 +53,10 @@ class CaptionRouter extends CaptionSource {
   int? get captionDisplayId => screen.captionDisplayId;
   @override
   String get waitingCaption => active.waitingCaption;
+  @override
+  List<String>? get captionTranslations => active.captionTranslations;
+  @override
+  List<ConfirmedCaption>? get captionConfirmed => active.captionConfirmed;
   @override
   void dispose() {
     screen.removeListener(_changed);

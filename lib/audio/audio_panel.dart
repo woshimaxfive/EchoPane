@@ -19,24 +19,73 @@ class AudioPanel extends StatelessWidget {
       final downloading = models.phase == ModelPhase.downloading;
       final status =
           controller.error ??
-          switch (models.phase) {
-            ModelPhase.checking => '正在校验本地模型',
-            ModelPhase.missing => '首次使用需要下载语音模型',
-            ModelPhase.failed => models.error ?? '模型不可用，请重试',
-            ModelPhase.downloading =>
-              '下载中 ${(models.received / models.total * 100).toStringAsFixed(0)}%',
-            ModelPhase.ready =>
-              controller.starting
-                  ? '正在加载本地识别'
-                  : controller.recognizing
-                  ? '正在识别语音'
-                  : controller.running
-                  ? '正在监听播放设备'
-                  : '本地模型已就绪',
-          };
+          (controller.isCloud
+              ? controller.stopping
+                    ? '正在完成最后一段…'
+                    : controller.starting
+                    ? '正在连接百炼实时语音…'
+                    : controller.running
+                    ? '正在实时翻译播放设备中的语音'
+                    : '使用已保存的百炼北京 Key，目标语言沿用翻译设置'
+              : switch (models.phase) {
+                  ModelPhase.checking => '正在校验本地模型',
+                  ModelPhase.missing => '首次使用需要下载语音模型',
+                  ModelPhase.failed => models.error ?? '模型不可用，请重试',
+                  ModelPhase.downloading =>
+                    '下载中 ${(models.received / models.total * 100).toStringAsFixed(0)}%',
+                  ModelPhase.ready =>
+                    controller.starting
+                        ? '正在加载本地识别'
+                        : controller.recognizing
+                        ? '正在识别语音'
+                        : controller.running
+                        ? '正在监听播放设备'
+                        : '本地模型已就绪',
+                });
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(
+            children: [
+              SizedBox(
+                width: 210,
+                child: DropdownButton<AudioBackend>(
+                  key: const Key('audio-backend'),
+                  isExpanded: true,
+                  value: controller.backend,
+                  items: const [
+                    DropdownMenuItem(
+                      value: AudioBackend.local,
+                      child: Text('本地语音识别'),
+                    ),
+                    DropdownMenuItem(
+                      value: AudioBackend.cloud,
+                      child: Text('百炼实时翻译 · 云端'),
+                    ),
+                  ],
+                  onChanged: controller.busy
+                      ? null
+                      : (value) {
+                          if (value != null) controller.selectBackend(value);
+                        },
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  controller.isCloud
+                      ? '点击开始后将上传播放设备声音，按服务用量计费；只显示文字'
+                      : '语音识别在本机运行，不上传声音',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xff708196),
+                  ),
+                ),
+              ),
+            ],
+          ),
           const Text(
             '听取电脑正在播放的语音，自动生成字幕。麦克风关闭。',
             style: TextStyle(color: Color(0xff708196)),
@@ -130,17 +179,18 @@ class AudioPanel extends StatelessWidget {
                   ),
                 ),
               ),
-              if (downloading)
+              if (downloading && !controller.isCloud)
                 TextButton(onPressed: models.cancel, child: const Text('取消')),
-              if (models.phase == ModelPhase.missing ||
-                  models.phase == ModelPhase.failed)
+              if (!controller.isCloud &&
+                  (models.phase == ModelPhase.missing ||
+                      models.phase == ModelPhase.failed))
                 TextButton(
                   onPressed: models.download,
                   child: const Text('下载模型 · 148.8 MB'),
                 ),
             ],
           ),
-          if (downloading)
+          if (downloading && !controller.isCloud)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: LinearProgressIndicator(
@@ -192,7 +242,11 @@ class AudioPanel extends StatelessWidget {
                 Expanded(
                   child: Text(
                     translation!.error ??
-                        (translation!.enabled
+                        (controller.isCloud
+                            ? controller.provisional
+                                  ? '临时字幕正在修正，完成后才加入记录'
+                                  : '实时译文由百炼返回，目标语言在翻译设置中选择'
+                            : translation!.enabled
                             ? translation!.phase == TranslationPhase.translating
                                   ? '正在翻译…'
                                   : '语音文字会发送到 ${translation!.settings.endpoint.host}'
@@ -229,6 +283,8 @@ class AudioPanel extends StatelessWidget {
                 child: Text(
                   controller.dropped > 0
                       ? '识别跟不上播放速度，已跳过部分音频'
+                      : controller.isCloud
+                      ? '自动识别语言${controller.detectedLanguage.isEmpty ? '' : '：${controller.detectedLanguage}'} · 不保存音频'
                       : controller.durationMs > 0
                       ? '检测语言：${controller.detectedLanguage} · 最近识别 ${controller.durationMs} ms'
                       : '本地语音识别 · 不保存音频',
@@ -244,7 +300,9 @@ class AudioPanel extends StatelessWidget {
               FilledButton.icon(
                 key: const Key('audio-toggle'),
                 onPressed:
-                    controller.stopping || models.phase != ModelPhase.ready
+                    controller.stopping ||
+                        (!controller.isCloud &&
+                            models.phase != ModelPhase.ready)
                     ? null
                     : controller.running || controller.starting
                     ? controller.stop
