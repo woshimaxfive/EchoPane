@@ -1,5 +1,11 @@
 # Windows integration tests
 
+The independent subtitle suite uses the OCR fixtures with an injected translation fixture and isolated temporary settings. It opens a real layered window, checks presentation, capture exclusion while covering the input, interactive/transparent hit tests, recovery, resizing, minimized-main-window behavior, and minimum-size settings. The Debug screenshot method temporarily permits capture of this application's overlay over the owned fixture, with native screen capture stopped; it is excluded from Release builds. No production key or translation configuration is changed.
+
+```powershell
+flutter test integration_test/windows_subtitles_test.dart -d windows --dart-define=ECHO_OCR_FIXTURES=C:/ocr-fixtures/manifest.json --dart-define=ECHO_TEST_ARTIFACTS=C:/ocr-fixtures/results
+```
+
 The tests require a Windows interactive desktop, Flutter's Windows build tools, and the native OCR dependencies described in the project README. Test-only native methods are excluded from Release builds.
 
 Run capture regression:

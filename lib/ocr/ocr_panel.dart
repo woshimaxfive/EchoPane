@@ -28,7 +28,11 @@ class OcrPanel extends StatelessWidget {
               (controller.loading
                   ? '正在加载模型'
                   : controller.ready
-                  ? (controller.capture.running ? '本地识别中' : '本地模型已就绪')
+                  ? (controller.capture.running
+                        ? controller.stabilizing
+                              ? '正在稳定字幕'
+                              : '本地识别中'
+                        : '本地模型已就绪')
                   : '文字识别未就绪'),
       };
       return Column(

@@ -302,7 +302,12 @@ void main() {
       await capture.initialize();
       final models = OcrModelStore(directory: 'unused')
         ..phase = ModelPhase.ready;
-      final ocr = OcrController(capture, models, FakeOcr());
+      final ocr = OcrController(
+        capture,
+        models,
+        FakeOcr(),
+        firstDelay: Duration.zero,
+      );
       final provider = FakeTranslations();
       final credentials = MemoryCredentials()..key = 'test-key';
       final controller = TranslationController(
@@ -368,7 +373,12 @@ void main() {
       await capture.initialize();
       final models = OcrModelStore(directory: 'unused')
         ..phase = ModelPhase.ready;
-      final ocr = OcrController(capture, models, FakeOcr());
+      final ocr = OcrController(
+        capture,
+        models,
+        FakeOcr(),
+        firstDelay: Duration.zero,
+      );
       final provider = FakeTranslations();
       final controller = TranslationController(
         ocr,

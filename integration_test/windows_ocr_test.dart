@@ -70,6 +70,12 @@ void main() {
             );
           }
           expect(ocr.recognized, greaterThan(0));
+          // Native inference completion precedes the buffered caption commit.
+          for (int i = 0; i < 20 && ocr.stabilizing; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+            await ocr.poll();
+          }
+          expect(ocr.stabilizing, isFalse);
           results.add({
             'name': fixture['name'],
             'text': ocr.text,

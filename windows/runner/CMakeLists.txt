@@ -11,6 +11,7 @@ add_executable(${BINARY_NAME} WIN32
   "screen_capture.cpp"
   "ocr_service.cpp"
   "credential_store.cpp"
+  "subtitle_overlay.cpp"
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"
@@ -41,7 +42,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app flutter_wrapper_plugin)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE d3d11 dxgi windowsapp)
-target_link_libraries(${BINARY_NAME} PRIVATE advapi32)
+target_link_libraries(${BINARY_NAME} PRIVATE advapi32 gdi32)
 include(ocr_dependencies.cmake)
 target_link_libraries(${BINARY_NAME} PRIVATE echopane_rapidocr)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

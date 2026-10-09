@@ -11,6 +11,10 @@ import 'translation/provider.dart';
 import 'translation/settings.dart';
 import 'translation/settings_dialog.dart';
 import 'translation/translation_controller.dart';
+import 'subtitles/overlay_controller.dart';
+import 'subtitles/overlay_dialog.dart';
+import 'subtitles/overlay_platform.dart';
+import 'subtitles/overlay_settings.dart';
 
 Future<void> main() => startApplication();
 
@@ -18,6 +22,8 @@ Future<void> startApplication({
   SettingsStore? settingsStore,
   CredentialStore? credentials,
   TranslationProvider? translationProvider,
+  OverlayPlatform? overlayPlatform,
+  OverlaySettingsStore? overlaySettingsStore,
 }) async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
@@ -28,6 +34,9 @@ Future<void> startApplication({
       items: [
         MenuItem(key: 'show', label: '显示窗口'),
         MenuItem(key: 'stop', label: '停止捕获'),
+        MenuItem(key: 'subtitles', label: '显示悬浮字幕'),
+        MenuItem(key: 'subtitle_restore', label: '恢复字幕操作'),
+        MenuItem(key: 'subtitle_hide', label: '隐藏悬浮字幕'),
         MenuItem.separator(),
         MenuItem(key: 'quit', label: '退出'),
       ],
@@ -56,12 +65,24 @@ Future<void> startApplication({
     settingsStore ?? FileSettingsStore(),
     credentials ?? const WindowsCredentialStore(),
   );
+  final overlay = OverlayController(
+    ocr,
+    translation,
+    overlayPlatform ?? WindowsOverlayPlatform(),
+    overlaySettingsStore ?? FileOverlaySettingsStore(),
+  );
   runApp(
-    EchoPaneApp(controller: controller, ocr: ocr, translation: translation),
+    EchoPaneApp(
+      controller: controller,
+      ocr: ocr,
+      translation: translation,
+      overlay: overlay,
+    ),
   );
   await controller.initialize();
   await models.check();
   await translation.initialize();
+  await overlay.initialize();
 }
 
 class EchoPaneApp extends StatelessWidget {
@@ -70,10 +91,12 @@ class EchoPaneApp extends StatelessWidget {
     required this.controller,
     this.ocr,
     this.translation,
+    this.overlay,
   });
   final CaptureController controller;
   final OcrController? ocr;
   final TranslationController? translation;
+  final OverlayController? overlay;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -93,6 +116,7 @@ class EchoPaneApp extends StatelessWidget {
         controller: controller,
         ocr: ocr,
         translation: translation,
+        overlay: overlay,
       ),
     ),
   );
@@ -104,10 +128,12 @@ class CaptureWindow extends StatefulWidget {
     required this.controller,
     this.ocr,
     this.translation,
+    this.overlay,
   });
   final CaptureController controller;
   final OcrController? ocr;
   final TranslationController? translation;
+  final OverlayController? overlay;
 
   @override
   State<CaptureWindow> createState() => _CaptureWindowState();
@@ -128,6 +154,7 @@ class _CaptureWindowState extends State<CaptureWindow>
 
   @override
   void onWindowClose() async {
+    await widget.overlay?.close();
     await widget.controller.stop();
     await trayManager.destroy();
     await windowManager.destroy();
@@ -157,6 +184,12 @@ class _CaptureWindowState extends State<CaptureWindow>
         onTrayIconMouseDown();
       case 'stop':
         widget.controller.stop();
+      case 'subtitles':
+        widget.overlay?.show(true);
+      case 'subtitle_restore':
+        widget.overlay?.show(true, restore: true);
+      case 'subtitle_hide':
+        widget.overlay?.close();
       case 'quit':
         onWindowClose();
     }
@@ -271,6 +304,17 @@ class _CaptureWindowState extends State<CaptureWindow>
                         ),
                       ),
                     ),
+                    if (widget.overlay != null)
+                      TextButton.icon(
+                        key: const Key('overlay-settings'),
+                        onPressed: () =>
+                            showOverlaySettings(context, widget.overlay!),
+                        icon: const Icon(
+                          Icons.picture_in_picture_alt,
+                          size: 18,
+                        ),
+                        label: const Text('悬浮字幕'),
+                      ),
                     if (widget.translation != null)
                       TextButton.icon(
                         key: const Key('translation-settings'),

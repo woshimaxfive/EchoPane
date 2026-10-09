@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../capture/capture_controller.dart';
 import '../capture/capture_platform.dart';
 import 'model_store.dart';
+import '../subtitles/caption_stabilizer.dart';
 
 class OcrLine {
   const OcrLine(this.text, this.confidence);
@@ -31,7 +33,26 @@ class WindowsOcrPlatform implements OcrPlatform {
 }
 
 class OcrController extends ChangeNotifier {
-  OcrController(this.capture, this.models, this.platform) {
+  OcrController(
+    this.capture,
+    this.models,
+    this.platform, {
+    Duration firstDelay = const Duration(milliseconds: 120),
+    Duration changeDelay = const Duration(milliseconds: 500),
+    Duration emptyDelay = const Duration(milliseconds: 700),
+    Duration maximumWait = const Duration(milliseconds: 1200),
+  }) {
+    _stabilizer = CaptionStabilizer<OcrLine>(
+      (next) {
+        if (_disposed || !capture.running || error != null) return;
+        lines = next;
+        _notify();
+      },
+      firstDelay: firstDelay,
+      changeDelay: changeDelay,
+      emptyDelay: emptyDelay,
+      maximumWait: maximumWait,
+    );
     capture.addListener(_captureChanged);
     models.addListener(_modelsChanged);
     _timer = Timer.periodic(const Duration(milliseconds: 400), (_) => poll());
@@ -41,6 +62,7 @@ class OcrController extends ChangeNotifier {
   final CaptureController capture;
   final OcrModelStore models;
   final OcrPlatform platform;
+  late final CaptionStabilizer<OcrLine> _stabilizer;
   Timer? _timer;
   bool ready = false;
   bool loading = false;
@@ -55,11 +77,13 @@ class OcrController extends ChangeNotifier {
   bool _disposed = false;
   int _generation = 0;
   String get text => lines.map((line) => line.text).join('\n');
+  bool get stabilizing => _stabilizer.pending;
 
   void _captureChanged() {
     if (capture.running != _wasRunning) {
       ++_generation;
       _wasRunning = capture.running;
+      _stabilizer.reset();
       lines = [];
       error = null;
       recognized = 0;
@@ -79,6 +103,8 @@ class OcrController extends ChangeNotifier {
     loading = true;
     ready = false;
     error = null;
+    _stabilizer.reset();
+    lines = [];
     _notify();
     try {
       await platform.load(models.directory);
@@ -101,13 +127,28 @@ class OcrController extends ChangeNotifier {
       loading = state['loading'] == true;
       if (generation == _generation) error = state['error'] as String?;
       if (generation == _generation && capture.running) {
-        lines = (state['lines'] as List<Object?>? ?? []).map((value) {
+        final next = (state['lines'] as List<Object?>? ?? []).map((value) {
           final map = value! as Map<Object?, Object?>;
           return OcrLine(
             map['text']! as String,
             (map['confidence']! as num).toDouble(),
           );
         }).toList();
+        if (error == null) {
+          _stabilizer.submit(
+            next,
+            jsonEncode(
+              next
+                  .map(
+                    (line) => line.text.trim().replaceAll(RegExp(r'\s+'), ' '),
+                  )
+                  .toList(),
+            ),
+          );
+        } else {
+          _stabilizer.reset();
+          lines = [];
+        }
         durationMs = state['durationMs'] as int? ?? 0;
         recognized = state['recognized'] as int? ?? 0;
         skipped = state['skipped'] as int? ?? 0;
@@ -115,12 +156,16 @@ class OcrController extends ChangeNotifier {
       _notify();
     } on PlatformException catch (exception) {
       if (!_disposed && generation == _generation) {
+        _stabilizer.reset();
+        lines = [];
         error = exception.message ?? '文字识别不可用，请重试';
         loading = false;
         _notify();
       }
     } catch (_) {
       if (!_disposed && generation == _generation) {
+        _stabilizer.reset();
+        lines = [];
         error = '无法读取识别结果，请重试';
         loading = false;
         _notify();
@@ -139,6 +184,7 @@ class OcrController extends ChangeNotifier {
     _disposed = true;
     ++_generation;
     _timer?.cancel();
+    _stabilizer.dispose();
     capture.removeListener(_captureChanged);
     models.removeListener(_modelsChanged);
     super.dispose();

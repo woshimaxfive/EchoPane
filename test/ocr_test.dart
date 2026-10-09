@@ -34,7 +34,12 @@ void main() {
     await capture.initialize();
     final models = OcrModelStore(directory: 'unused')..phase = ModelPhase.ready;
     final platform = FakeOcr();
-    final ocr = OcrController(capture, models, platform);
+    final ocr = OcrController(
+      capture,
+      models,
+      platform,
+      firstDelay: Duration.zero,
+    );
     await capture.start();
     await ocr.poll();
     expect(ocr.text, '明日の朝');

@@ -28,6 +28,7 @@ bool FlutterWindow::OnCreate() {
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
   screen_capture_ = std::make_unique<ScreenCapture>(flutter_controller_->engine(), GetHandle());
   credential_store_ = std::make_unique<CredentialStore>(flutter_controller_->engine());
+  subtitle_overlay_ = std::make_unique<SubtitleOverlay>(flutter_controller_->engine(), GetHandle());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
@@ -42,6 +43,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  subtitle_overlay_.reset();
   credential_store_.reset();
   screen_capture_.reset();
   if (flutter_controller_) {
