@@ -20,6 +20,7 @@ import 'translation_test.dart'
     show FakeTranslations, MemorySettings, MemoryCredentials;
 
 class _IdleOverlay implements OverlayPlatform {
+  final captureOptions = <bool>[];
   @override
   void listen(void Function(OverlayWindowState)? listener) {}
   @override
@@ -27,20 +28,69 @@ class _IdleOverlay implements OverlayPlatform {
     required bool visible,
     required bool locked,
     bool restore = false,
+    bool allowCapture = false,
     int? displayId,
-  }) async => const OverlayWindowState();
+  }) async {
+    captureOptions.add(allowCapture);
+    return OverlayWindowState(visible: visible, locked: locked);
+  }
+
   @override
   Future<bool> present(int width, int height, Uint8List rgba) async => false;
 }
 
 class _MemoryStyles implements OverlaySettingsStore {
+  OverlaySettings value = const OverlaySettings();
+  bool failWrite = false;
   @override
-  Future<OverlaySettings> read() async => const OverlaySettings();
+  Future<OverlaySettings> read() async => value;
   @override
-  Future<void> write(OverlaySettings settings) async {}
+  Future<void> write(OverlaySettings settings) async {
+    if (failWrite) throw StateError('Storage unavailable');
+    value = settings;
+  }
 }
 
 void main() {
+  testWidgets(
+    'failed remote setting save restores capture exclusion and retains mouse pass-through',
+    (tester) async {
+      final capture = CaptureController(FakePlatform());
+      final models = OcrModelStore(directory: 'unused');
+      final ocr = OcrController(capture, models, FakeOcr());
+      final translation = TranslationController(
+        ocr,
+        FakeTranslations(),
+        MemorySettings(),
+        MemoryCredentials(),
+      );
+      final platform = _IdleOverlay();
+      final store = _MemoryStyles();
+      final overlay = OverlayController(ocr, translation, platform, store);
+      try {
+        await overlay.initialize();
+        await overlay.show(true, locked: true);
+        store.failWrite = true;
+        await expectLater(
+          overlay.save(overlay.settings.copyWith(allowCapture: true)),
+          throwsStateError,
+        );
+        expect(platform.captureOptions, [false, true, false]);
+        expect(overlay.settings.allowCapture, isFalse);
+        expect(store.value.allowCapture, isFalse);
+        expect(overlay.window.locked, isTrue);
+        expect(overlay.busy, isFalse);
+        await overlay.close();
+        await tester.pumpAndSettle();
+      } finally {
+        overlay.dispose();
+        translation.dispose();
+        ocr.dispose();
+        models.dispose();
+        capture.dispose();
+      }
+    },
+  );
   test('overlay rejects mismatched translations and clears content when capture stops', () async {
     final capture = CaptureController(FakePlatform());
     final models = OcrModelStore(directory: 'unused');
@@ -176,12 +226,14 @@ void main() {
             fontSize: 32,
             backgroundOpacity: 0,
             maxLines: 6,
+            allowCapture: true,
           ),
         );
         final read = await store.read();
         expect(read.mode, SubtitleMode.original);
         expect(read.fontSize, 32);
         expect(read.backgroundOpacity, 0);
+        expect(read.allowCapture, isTrue);
         final value =
             jsonDecode(await file.readAsString(encoding: utf8)) as Map;
         expect(
@@ -192,8 +244,11 @@ void main() {
             'fontSize',
             'backgroundOpacity',
             'maxLines',
+            'allowCapture',
           ]),
         );
+        final legacy = Map<String, dynamic>.from(value)..remove('allowCapture');
+        expect(OverlaySettings.fromJson(legacy).allowCapture, isFalse);
         expect((await file.readAsBytes()).take(3), isNot([239, 187, 191]));
         await file.writeAsString('{"mode":"bad"}', encoding: utf8);
         await expectLater(store.read(), throwsA(anything));

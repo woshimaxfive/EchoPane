@@ -9,21 +9,25 @@ class OverlaySettings {
     this.fontSize = 26,
     this.backgroundOpacity = 0.82,
     this.maxLines = 4,
+    this.allowCapture = false,
   });
   final SubtitleMode mode;
   final double fontSize;
   final double backgroundOpacity;
   final int maxLines;
+  final bool allowCapture;
   OverlaySettings copyWith({
     SubtitleMode? mode,
     double? fontSize,
     double? backgroundOpacity,
     int? maxLines,
+    bool? allowCapture,
   }) => OverlaySettings(
     mode: mode ?? this.mode,
     fontSize: fontSize ?? this.fontSize,
     backgroundOpacity: backgroundOpacity ?? this.backgroundOpacity,
     maxLines: maxLines ?? this.maxLines,
+    allowCapture: allowCapture ?? this.allowCapture,
   );
   void validate() {
     if (!fontSize.isFinite ||
@@ -44,6 +48,7 @@ class OverlaySettings {
     'fontSize': fontSize,
     'backgroundOpacity': backgroundOpacity,
     'maxLines': maxLines,
+    'allowCapture': allowCapture,
   };
   factory OverlaySettings.fromJson(Map<String, dynamic> value) {
     final settings = OverlaySettings(
@@ -51,6 +56,7 @@ class OverlaySettings {
       fontSize: (value['fontSize'] as num).toDouble(),
       backgroundOpacity: (value['backgroundOpacity'] as num).toDouble(),
       maxLines: value['maxLines'] as int,
+      allowCapture: value['allowCapture'] as bool? ?? false,
     );
     settings.validate();
     return settings;

@@ -283,6 +283,39 @@ void main() {
         await tester.pump(const Duration(milliseconds: 200));
         expect(overlay.originals, isEmpty);
         expect(overlay.translations, isEmpty);
+        await overlay.show(true, locked: true);
+        await overlay.save(overlay.settings.copyWith(allowCapture: true));
+        expect((await styles.read()).allowCapture, isTrue);
+        expect((await state())['excluded'], isFalse);
+        expect((await state())['transparent'], isTrue);
+        expect(await native.invokeMethod<int>('debugHitTest'), -1);
+        // WGC must see the allowed overlay even while mouse pass-through is on.
+        await screen.invokeMethod<int>('start', {
+          'displayId': capture.display!.id,
+          'region': CaptureRegion.fromMap(crop).toMap(),
+        });
+        Map<Object?, Object?>? remoteCapture;
+        for (int i = 0; i < 40; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          remoteCapture = await screen.invokeMapMethod<Object?, Object?>(
+            'snapshot',
+          );
+          if ((remoteCapture!['frames'] as int) >= 3) break;
+        }
+        final capturedOverlayPixel = remoteCapture!['centerPixel'] as List;
+        expect(
+          ((capturedOverlayPixel[1] as int) - (baselinePixel[1] as int)).abs(),
+          greaterThan(10),
+        );
+        await screen.invokeMethod<void>('stop');
+        await native.invokeMethod<Object?>('debugScreenshot');
+        expect((await state())['excluded'], isFalse);
+        await overlay.show(false);
+        await overlay.show(true, locked: true);
+        expect((await state())['excluded'], isFalse);
+        await overlay.save(overlay.settings.copyWith(allowCapture: false));
+        expect((await state())['excluded'], isTrue);
+        expect((await state())['transparent'], isTrue);
         await native.invokeMethod<Object?>('debugClose');
         await tester.pump(const Duration(milliseconds: 100));
         expect(overlay.window.visible, isFalse);
@@ -295,13 +328,23 @@ void main() {
         await tester.tap(find.byKey(const Key('overlay-settings')));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
-        await tester.tap(find.text('关闭'));
+        await tester.ensureVisible(
+          find.byKey(const Key('overlay-allow-capture')),
+        );
+        await tester.tap(find.byKey(const Key('overlay-allow-capture')));
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('overlay-save')));
         await tester.pumpAndSettle();
+        expect((await styles.read()).allowCapture, isTrue);
+        await overlay.show(true);
+        expect((await state())['excluded'], isFalse);
+        await overlay.close();
         if (artifacts.isNotEmpty) {
           await File('$artifacts/subtitle-results.json').writeAsString(
             jsonEncode({
               'translation': 'Injected fixture, not a real provider',
               'captureExclusion': true,
+              'remoteCaptureToggle': true,
               'topmost': true,
               'lockedHitTest': -1,
               'interactiveHitTest': 2,

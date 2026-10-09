@@ -83,6 +83,20 @@ class _OverlaySettingsDialogState extends State<OverlaySettingsDialog> {
                         ),
                 ),
                 const SizedBox(height: 12),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  key: const Key('overlay-allow-capture'),
+                  title: const Text('允许远程桌面和录屏显示字幕'),
+                  subtitle: const Text('保存后生效。开启时请将字幕移出屏幕识别区域，避免重复识别。'),
+                  value: _settings.allowCapture,
+                  onChanged: _saving || controller.busy
+                      ? null
+                      : (value) => setState(
+                          () => _settings = _settings.copyWith(
+                            allowCapture: value,
+                          ),
+                        ),
+                ),
                 _slider(
                   '字号',
                   '${_settings.fontSize.round()}',
@@ -162,7 +176,7 @@ class _OverlaySettingsDialogState extends State<OverlaySettingsDialog> {
                     ),
                   ),
                 const Text(
-                  '样式保存后应用到字幕窗口；显示和穿透状态不会随重启恢复。',
+                  '样式和远程兼容设置保存后生效；显示和穿透状态不会随重启恢复。',
                   style: TextStyle(fontSize: 12, color: Color(0xff708196)),
                 ),
               ],

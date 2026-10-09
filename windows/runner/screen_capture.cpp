@@ -182,7 +182,8 @@ bool SelectRegion(const Display& display, RECT& rectangle) {
       nullptr, nullptr, instance, &selection);
   if (!window) throw std::runtime_error("Could not open region selector");
   SetLayeredWindowAttributes(window, 0, 110, LWA_ALPHA);
-  SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE);
+  // Capture is stopped during selection; allow remote users to see the drag box.
+  SetWindowDisplayAffinity(window, WDA_NONE);
   ShowWindow(window, SW_SHOW);
   SetForegroundWindow(window);
   SetFocus(window);
@@ -299,8 +300,8 @@ ScreenCapture::ScreenCapture(flutter::FlutterEngine* engine, HWND window)
   channel_->SetMethodCallHandler([this](const auto& call, auto result) {
     Handle(call, std::move(result));
   });
-  if (!SetWindowDisplayAffinity(window_, WDA_EXCLUDEFROMCAPTURE))
-    OutputDebugStringW(L"EchoPane: capture exclusion could not be enabled\n");
+  // Keep controls visible to remote desktops and recorders.
+  SetWindowDisplayAffinity(window_, WDA_NONE);
 }
 
 ScreenCapture::~ScreenCapture() {
@@ -472,7 +473,9 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
       SetWindowLongPtr(fixture_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(fixture_pixels_.get()));
       InvalidateRect(fixture_, nullptr, TRUE);
       UpdateWindow(fixture_);
-      SetWindowPos(window_, HWND_TOPMOST, display.bounds.left + 60, display.bounds.top + 60,
+      // Text fixtures must not be obscured by the now-capturable controls.
+      const int main_y = display.bounds.top + 60 + (fixture_pixels_ ? height + 24 : 0);
+      SetWindowPos(window_, HWND_TOPMOST, display.bounds.left + 60, main_y,
           MulDiv(900, GetDpiForWindow(window_), 96), MulDiv(660, GetDpiForWindow(window_), 96), SWP_SHOWWINDOW);
       RECT crop{60, 60, 60 + width, 60 + height};
       result->Success(EncodableValue(RegionMap(crop)));
@@ -487,16 +490,12 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
     }
     if (method == "debugSampleWindowEdge") {
       if (state_ || !fixture_) throw std::runtime_error("Transparency probe requires idle fixture");
-      if (!SetWindowDisplayAffinity(window_, WDA_NONE))
-        throw std::runtime_error("Cannot prepare transparency probe");
       DwmFlush();
       RECT rectangle{};
       GetWindowRect(window_, &rectangle);
       HDC dc = GetDC(nullptr);
       COLORREF pixel = GetPixel(dc, rectangle.left + 4, rectangle.top + 4);
       ReleaseDC(nullptr, dc);
-      if (!SetWindowDisplayAffinity(window_, WDA_EXCLUDEFROMCAPTURE))
-        throw std::runtime_error("Cannot restore capture exclusion");
       result->Success(EncodableValue(EncodableList{
         EncodableValue(GetRValue(pixel)), EncodableValue(GetGValue(pixel)), EncodableValue(GetBValue(pixel))}));
       return;
@@ -509,19 +508,24 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
         HWND selector = nullptr;
         for (int retry = 0; retry < 100 && !selector; ++retry) {
           selector = FindWindowW(L"EchoPaneRegionSelection", nullptr);
+          if (selector && !IsWindowVisible(selector)) selector = nullptr;
           if (!selector) Sleep(20);
         }
-        if (!selector) return;
+        if (!selector) return DWORD{0xffffffff};
+        DWORD affinity = 0xffffffff;
+        GetWindowDisplayAffinity(selector, &affinity);
         if (cancel) PostMessage(selector, WM_KEYDOWN, VK_ESCAPE, 0);
         else {
           PostMessage(selector, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(360, 240));
           PostMessage(selector, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(100, 80));
           PostMessage(selector, WM_LBUTTONUP, 0, MAKELPARAM(100, 80));
         }
+        return affinity;
       });
       RECT rectangle{};
       bool accepted = SelectRegion(display, rectangle);
-      input.wait();
+      if (input.get() != WDA_NONE)
+        throw std::runtime_error("Region selector is not capturable");
       if (accepted) result->Success(EncodableValue(RegionMap(rectangle)));
       else result->Success();
       return;
@@ -552,9 +556,6 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
     Stop();
     if (!GraphicsCaptureSession::IsSupported())
       throw std::runtime_error("当前系统不支持屏幕捕获");
-    DWORD affinity = 0;
-    if (!GetWindowDisplayAffinity(window_, &affinity) || affinity != WDA_EXCLUDEFROMCAPTURE)
-      throw std::runtime_error("未能排除应用自身窗口，无法开始捕获");
     auto region = arguments.find(EncodableValue("region"));
     if (region != arguments.end()) {
       const auto& values = std::get<EncodableMap>(region->second);

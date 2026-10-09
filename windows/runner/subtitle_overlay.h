@@ -16,7 +16,7 @@ class SubtitleOverlay {
   using Map = flutter::EncodableMap;
   void Handle(const flutter::MethodCall<Value>& call,
               std::unique_ptr<flutter::MethodResult<Value>> result);
-  void EnsureWindow();
+  void EnsureWindow(bool allow_capture);
   void Place(HMONITOR monitor);
   bool Lock(bool locked);
   Map Snapshot() const;

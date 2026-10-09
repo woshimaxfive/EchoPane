@@ -41,7 +41,7 @@ SubtitleOverlay::~SubtitleOverlay() {
   }
 }
 
-void SubtitleOverlay::EnsureWindow() {
+void SubtitleOverlay::EnsureWindow(bool allow_capture) {
   if (window_) return;
   WNDCLASSW wc{};
   wc.lpfnWndProc = WindowProc;
@@ -54,7 +54,7 @@ void SubtitleOverlay::EnsureWindow() {
       WS_EX_TOPMOST, kClass, L"EchoPane · 悬浮字幕", WS_POPUP | WS_THICKFRAME,
       0, 0, 720, 220, nullptr, nullptr, wc.hInstance, this);
   if (!window_) throw std::runtime_error("Overlay creation failed");
-  if (!SetWindowDisplayAffinity(window_, WDA_EXCLUDEFROMCAPTURE)) {
+  if (!SetWindowDisplayAffinity(window_, allow_capture ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE)) {
     SetWindowLongPtr(window_, GWLP_USERDATA, 0);
     DestroyWindow(window_);
     window_ = nullptr;
@@ -125,7 +125,11 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
       const auto& args = std::get<Map>(*call.arguments());
       const bool visible = std::get<bool>(args.at(Value("visible")));
       if (visible) {
-        EnsureWindow();
+        const auto capture_option = args.find(Value("allowCapture"));
+        const bool allow_capture = capture_option != args.end() && std::get<bool>(capture_option->second);
+        EnsureWindow(allow_capture);
+        if (!SetWindowDisplayAffinity(window_, allow_capture ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE))
+          throw std::runtime_error("Overlay capture policy update failed");
         if (!hotkey_) hotkey_ = RegisterHotKey(window_, kHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'S') != 0;
         if (std::get<bool>(args.at(Value("restore")))) {
           HMONITOR monitor = MonitorFromWindow(main_window_, MONITOR_DEFAULTTONEAREST);
@@ -185,7 +189,7 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
       result->Success(Value(true));
 #ifndef NDEBUG
     } else if (method == "debugMove") {
-      EnsureWindow();
+      EnsureWindow(false);
       const auto& args = std::get<Map>(*call.arguments());
       const int width = Integer(args, "width"), height = Integer(args, "height");
       if (width < 280 || width > kMaximumWidth || height < 80 || height > kMaximumHeight)
@@ -220,7 +224,9 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
       if (!window_ || !IsWindowVisible(window_) || width < 1 || height < 1 ||
           width > kMaximumWidth || height > kMaximumHeight)
         throw std::runtime_error("No test overlay");
-      if (!SetWindowDisplayAffinity(window_, WDA_NONE))
+      DWORD previous_affinity = WDA_NONE;
+      if (!GetWindowDisplayAffinity(window_, &previous_affinity) ||
+          !SetWindowDisplayAffinity(window_, WDA_NONE))
         throw std::runtime_error("Cannot sample test overlay");
       DwmFlush();
       HDC desktop = GetDC(nullptr), dc = CreateCompatibleDC(desktop);
@@ -249,8 +255,8 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
       if (bitmap) DeleteObject(bitmap);
       if (dc) DeleteDC(dc);
       if (desktop) ReleaseDC(nullptr, desktop);
-      const bool excluded = SetWindowDisplayAffinity(window_, WDA_EXCLUDEFROMCAPTURE) != 0;
-      if (!copied || !excluded) throw std::runtime_error("Cannot restore test overlay exclusion");
+      const bool restored = SetWindowDisplayAffinity(window_, previous_affinity) != 0;
+      if (!copied || !restored) throw std::runtime_error("Cannot restore test overlay capture policy");
       result->Success(Value(Map{{Value("width"), Value(width)}, {Value("height"), Value(height)},
           {Value("rgba"), Value(rgba)}}));
 #endif

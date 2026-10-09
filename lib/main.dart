@@ -537,8 +537,8 @@ class _CaptureWindowState extends State<CaptureWindow>
                       Expanded(
                         child: Text(
                           state.region == null
-                              ? '范围：整块显示器'
-                              : '范围：${state.region!.width} × ${state.region!.height} 像素',
+                              ? '范围：整块显示器\n请将主窗口移出识别区域，或最小化到托盘'
+                              : '范围：${state.region!.width} × ${state.region!.height} 像素\n请将主窗口移出识别区域，或最小化到托盘',
                           style: const TextStyle(
                             fontSize: 12,
                             color: Color(0xff708196),

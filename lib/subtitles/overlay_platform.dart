@@ -32,6 +32,7 @@ abstract interface class OverlayPlatform {
     required bool visible,
     required bool locked,
     bool restore = false,
+    bool allowCapture = false,
     int? displayId,
   });
   Future<bool> present(int width, int height, Uint8List rgba);
@@ -61,12 +62,14 @@ class WindowsOverlayPlatform implements OverlayPlatform {
     required bool visible,
     required bool locked,
     bool restore = false,
+    bool allowCapture = false,
     int? displayId,
   }) async => OverlayWindowState.fromMap(
     await channel.invokeMapMethod<Object?, Object?>('configure', {
           'visible': visible,
           'locked': locked,
           'restore': restore,
+          'allowCapture': allowCapture,
           'displayId': ?displayId,
         }) ??
         {},

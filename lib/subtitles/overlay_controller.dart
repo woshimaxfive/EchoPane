@@ -75,6 +75,7 @@ class OverlayController extends ChangeNotifier {
         locked: visible && !restore && (locked ?? window.locked),
         restore: restore || (visible && !window.visible),
         displayId: source.captionDisplayId,
+        allowCapture: settings.allowCapture,
       );
       if (_disposed) return;
       _windowChanged(next);
@@ -88,12 +89,45 @@ class OverlayController extends ChangeNotifier {
 
   Future<void> save(OverlaySettings next) async {
     next.validate();
-    await store.write(next);
-    if (_disposed) return;
-    settings = next;
-    error = null;
-    _changed(force: true);
+    if (_disposed || busy) throw StateError('字幕窗口正忙，请稍后重试');
+    busy = true;
     notifyListeners();
+    final previous = settings;
+    try {
+      if (window.visible && next.allowCapture != previous.allowCapture) {
+        final state = await platform.configure(
+          visible: true,
+          locked: window.locked,
+          allowCapture: next.allowCapture,
+          displayId: source.captionDisplayId,
+        );
+        _windowChanged(state);
+      }
+      await store.write(next);
+      if (_disposed) return;
+      settings = next;
+      error = null;
+      _changed(force: true);
+      notifyListeners();
+    } catch (_) {
+      if (window.visible && next.allowCapture != previous.allowCapture) {
+        try {
+          final state = await platform.configure(
+            visible: true,
+            locked: window.locked,
+            allowCapture: previous.allowCapture,
+            displayId: source.captionDisplayId,
+          );
+          _windowChanged(state);
+        } catch (_) {
+          error = '无法恢复字幕捕获设置，请关闭字幕窗口后重试';
+        }
+      }
+      rethrow;
+    } finally {
+      busy = false;
+      if (!_disposed) notifyListeners();
+    }
   }
 
   void _windowChanged(OverlayWindowState next) {

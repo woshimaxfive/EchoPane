@@ -13,7 +13,7 @@ import 'package:window_manager/window_manager.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('captures physical pixels while excluding its own window', (
+  testWidgets('captures controls and reveals input after hiding them', (
     tester,
   ) async {
     await app.main();
@@ -56,15 +56,26 @@ void main() {
       expect(snapshot['frames'], greaterThanOrEqualTo(3));
       expect(snapshot['width'], 420);
       expect(snapshot['height'], 240);
-      expect(snapshot['excluded'], isTrue);
+      expect(snapshot['excluded'], isFalse);
       expect(snapshot['topmost'], isTrue);
       final evidence = Map<Object?, Object?>.from(snapshot);
       evidence['transparentEdge'] = edge;
-      final pixel = snapshot['centerPixel']! as List<Object?>;
+      final visiblePixel = snapshot['centerPixel']! as List<Object?>;
+      expect(((visiblePixel[1]! as int) - 176).abs(), greaterThan(10));
+      evidence['mainWindowCaptured'] = true;
+      await windowManager.hide();
+      for (int attempt = 0; attempt < 40; attempt++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        snapshot = await channel.invokeMapMethod<Object?, Object?>('snapshot');
+        final current = snapshot!['centerPixel'] as List;
+        if (((current[1] as int) - 176).abs() <= 4) break;
+      }
+      final pixel = snapshot!['centerPixel']! as List<Object?>;
       expect(pixel[0], closeTo(32, 3));
       expect(pixel[1], closeTo(176, 3));
       expect(pixel[2], closeTo(112, 3));
       await channel.invokeMethod<void>('stop');
+      await windowManager.show();
       await tester.pump(const Duration(milliseconds: 300));
       snapshot = await channel.invokeMapMethod<Object?, Object?>('snapshot');
       expect(snapshot!['frames'], 0);
@@ -121,6 +132,7 @@ void main() {
     } finally {
       await channel.invokeMethod<void>('stop');
       await channel.invokeMethod<void>('debugDestroyFixture');
+      await windowManager.show();
     }
   });
 }
