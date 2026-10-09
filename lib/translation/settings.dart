@@ -31,6 +31,16 @@ class TranslationSettings {
   final bool jsonMode;
   final bool disableThinking;
 
+  bool get isBailian => isBailianHost(endpoint.host);
+
+  static bool isBailianHost(String host) =>
+      const {
+        'dashscope.aliyuncs.com',
+        'dashscope-intl.aliyuncs.com',
+        'dashscope-us.aliyuncs.com',
+      }.contains(host) ||
+      host.endsWith('.maas.aliyuncs.com');
+
   Uri get endpoint {
     final uri = Uri.tryParse(baseUrl.trim());
     if (uri == null ||

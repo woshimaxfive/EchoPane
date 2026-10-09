@@ -99,7 +99,10 @@ class _HttpTranslationRequest implements TranslationRequest {
         'stream': false,
         'max_tokens': 4096,
         if (settings.jsonMode) 'response_format': {'type': 'json_object'},
-        if (settings.disableThinking) 'thinking': {'type': 'disabled'},
+        if (settings.disableThinking && settings.isBailian)
+          'enable_thinking': false,
+        if (settings.disableThinking && !settings.isBailian)
+          'thinking': {'type': 'disabled'},
         'messages': [
           {
             'role': 'system',

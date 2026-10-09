@@ -134,7 +134,25 @@ void main() {
         expect(capture.running, isFalse);
         await tester.tap(find.byKey(const Key('translation-settings')));
         await tester.pumpAndSettle();
-        await tester.tap(find.byType(DropdownButtonFormField<bool>));
+        await tester.tap(find.byKey(const Key('translation-service')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('阿里云百炼 · DeepSeek Flash').last);
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('translation-url')))
+              .controller!
+              .text,
+          'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        );
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('translation-model')))
+              .controller!
+              .text,
+          'deepseek-v4-flash',
+        );
+        await tester.tap(find.byKey(const Key('translation-service')));
         await tester.pumpAndSettle();
         await tester.tap(find.text('自定义兼容服务').last);
         await tester.pumpAndSettle();
@@ -190,6 +208,7 @@ void main() {
         }
         expect(translation.error, isNull);
         expect(translation.translations, ['我们得在日出前离开。', '这条路仍然畅通。']);
+        await tester.pump();
         expect(find.text('我们得在日出前离开。'), findsOneWidget);
         final firstLatency = elapsed.elapsedMilliseconds;
         await screenshot('bilingual-window');

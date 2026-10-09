@@ -20,6 +20,8 @@ class TranslationSettingsDialog extends StatefulWidget {
       _TranslationSettingsDialogState();
 }
 
+enum _Service { deepseek, bailian, custom }
+
 class _TranslationSettingsDialogState extends State<TranslationSettingsDialog> {
   late final TextEditingController _url;
   late final TextEditingController _model;
@@ -28,7 +30,7 @@ class _TranslationSettingsDialogState extends State<TranslationSettingsDialog> {
   late String _target;
   late bool _jsonMode;
   late bool _disableThinking;
-  bool _custom = false;
+  _Service _service = _Service.deepseek;
   bool _showKey = false;
   bool _busy = false;
   String? _message;
@@ -43,7 +45,11 @@ class _TranslationSettingsDialogState extends State<TranslationSettingsDialog> {
     _target = settings.target;
     _jsonMode = settings.jsonMode;
     _disableThinking = settings.disableThinking;
-    _custom = settings.endpoint.host != 'api.deepseek.com';
+    _service = settings.isBailian
+        ? _Service.bailian
+        : settings.endpoint.host == 'api.deepseek.com'
+        ? _Service.deepseek
+        : _Service.custom;
   }
 
   TranslationSettings _settings() => TranslationSettings(
@@ -110,23 +116,41 @@ class _TranslationSettingsDialogState extends State<TranslationSettingsDialog> {
           children: [
             const Text('开启翻译后，识别出的文字会发送到此服务。截图留在本机。'),
             const SizedBox(height: 18),
-            DropdownButtonFormField<bool>(
-              initialValue: _custom,
+            DropdownButtonFormField<_Service>(
+              key: const Key('translation-service'),
+              initialValue: _service,
               decoration: const InputDecoration(
                 labelText: '服务类型',
                 border: OutlineInputBorder(),
               ),
               items: const [
-                DropdownMenuItem(value: false, child: Text('DeepSeek 官方')),
-                DropdownMenuItem(value: true, child: Text('自定义兼容服务')),
+                DropdownMenuItem(
+                  value: _Service.deepseek,
+                  child: Text('DeepSeek 官方'),
+                ),
+                DropdownMenuItem(
+                  value: _Service.bailian,
+                  child: Text('阿里云百炼 · DeepSeek Flash'),
+                ),
+                DropdownMenuItem(
+                  value: _Service.custom,
+                  child: Text('自定义兼容服务'),
+                ),
               ],
               onChanged: _busy
                   ? null
                   : (value) => setState(() {
-                      _custom = value!;
-                      if (!_custom) {
+                      _service = value!;
+                      _key.clear();
+                      if (_service == _Service.deepseek) {
                         _url.text = 'https://api.deepseek.com';
                         _model.text = 'deepseek-flash';
+                        _jsonMode = true;
+                        _disableThinking = true;
+                      } else if (_service == _Service.bailian) {
+                        _url.text =
+                            'https://dashscope.aliyuncs.com/compatible-mode/v1';
+                        _model.text = 'deepseek-v4-flash';
                         _jsonMode = true;
                         _disableThinking = true;
                       } else {
@@ -138,13 +162,15 @@ class _TranslationSettingsDialogState extends State<TranslationSettingsDialog> {
             TextField(
               key: const Key('translation-url'),
               controller: _url,
-              enabled: !_busy && _custom,
+              enabled: !_busy && _service != _Service.deepseek,
               maxLength: 2048,
               autocorrect: false,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: '服务地址',
                 hintText: 'https://example.com/v1',
-                helperText: '远程地址使用 HTTPS，本机服务可使用 HTTP',
+                helperText: _service == _Service.bailian
+                    ? '默认北京地域；可改为同地域的业务空间专属地址，Key 须与地域一致'
+                    : '远程地址使用 HTTPS，本机服务可使用 HTTP',
                 counterText: '',
                 border: OutlineInputBorder(),
               ),
@@ -255,7 +281,7 @@ class _TranslationSettingsDialogState extends State<TranslationSettingsDialog> {
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('发送关闭思考参数'),
-                  subtitle: const Text('DeepSeek 预设启用；其他服务按实际支持情况设置'),
+                  subtitle: const Text('DeepSeek 官方与百炼预设启用；参数随服务地址适配'),
                   value: _disableThinking,
                   onChanged: _busy
                       ? null
