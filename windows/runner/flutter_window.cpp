@@ -27,6 +27,7 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
   screen_capture_ = std::make_unique<ScreenCapture>(flutter_controller_->engine(), GetHandle());
+  credential_store_ = std::make_unique<CredentialStore>(flutter_controller_->engine());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
@@ -41,6 +42,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  credential_store_.reset();
   screen_capture_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;

@@ -7,8 +7,18 @@ import 'capture/capture_platform.dart';
 import 'ocr/model_store.dart';
 import 'ocr/ocr_controller.dart';
 import 'ocr/ocr_panel.dart';
+import 'translation/provider.dart';
+import 'translation/settings.dart';
+import 'translation/settings_dialog.dart';
+import 'translation/translation_controller.dart';
 
-Future<void> main() async {
+Future<void> main() => startApplication();
+
+Future<void> startApplication({
+  SettingsStore? settingsStore,
+  CredentialStore? credentials,
+  TranslationProvider? translationProvider,
+}) async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
   await trayManager.setIcon('assets/app.ico');
@@ -40,15 +50,30 @@ Future<void> main() async {
   final controller = CaptureController(WindowsCapturePlatform());
   final models = OcrModelStore();
   final ocr = OcrController(controller, models, WindowsOcrPlatform());
-  runApp(EchoPaneApp(controller: controller, ocr: ocr));
+  final translation = TranslationController(
+    ocr,
+    translationProvider ?? const ChatTranslationProvider(),
+    settingsStore ?? FileSettingsStore(),
+    credentials ?? const WindowsCredentialStore(),
+  );
+  runApp(
+    EchoPaneApp(controller: controller, ocr: ocr, translation: translation),
+  );
   await controller.initialize();
   await models.check();
+  await translation.initialize();
 }
 
 class EchoPaneApp extends StatelessWidget {
-  const EchoPaneApp({super.key, required this.controller, this.ocr});
+  const EchoPaneApp({
+    super.key,
+    required this.controller,
+    this.ocr,
+    this.translation,
+  });
   final CaptureController controller;
   final OcrController? ocr;
+  final TranslationController? translation;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -64,15 +89,25 @@ class EchoPaneApp extends StatelessWidget {
     ),
     home: RepaintBoundary(
       key: const Key('window-content'),
-      child: CaptureWindow(controller: controller, ocr: ocr),
+      child: CaptureWindow(
+        controller: controller,
+        ocr: ocr,
+        translation: translation,
+      ),
     ),
   );
 }
 
 class CaptureWindow extends StatefulWidget {
-  const CaptureWindow({super.key, required this.controller, this.ocr});
+  const CaptureWindow({
+    super.key,
+    required this.controller,
+    this.ocr,
+    this.translation,
+  });
   final CaptureController controller;
   final OcrController? ocr;
+  final TranslationController? translation;
 
   @override
   State<CaptureWindow> createState() => _CaptureWindowState();
@@ -228,7 +263,7 @@ class _CaptureWindowState extends State<CaptureWindow>
                   children: [
                     const Expanded(
                       child: Text(
-                        '屏幕识别',
+                        '屏幕翻译',
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w600,
@@ -236,6 +271,17 @@ class _CaptureWindowState extends State<CaptureWindow>
                         ),
                       ),
                     ),
+                    if (widget.translation != null)
+                      TextButton.icon(
+                        key: const Key('translation-settings'),
+                        onPressed: () => showTranslationSettings(
+                          context,
+                          widget.translation!,
+                        ),
+                        icon: const Icon(Icons.tune, size: 18),
+                        label: const Text('翻译服务'),
+                      ),
+                    const SizedBox(width: 12),
                     Icon(
                       Icons.circle,
                       size: 8,
@@ -300,6 +346,7 @@ class _CaptureWindowState extends State<CaptureWindow>
                 ),
                 const SizedBox(height: 10),
                 Expanded(
+                  flex: 2,
                   child: Container(
                     width: double.infinity,
                     clipBehavior: Clip.antiAlias,
@@ -370,9 +417,12 @@ class _CaptureWindowState extends State<CaptureWindow>
                 const SizedBox(height: 12),
                 if (widget.ocr != null) ...[
                   const Divider(height: 1, color: Color(0xffdae2e7)),
-                  SizedBox(
-                    height: 138,
-                    child: OcrPanel(controller: widget.ocr!),
+                  Expanded(
+                    flex: 3,
+                    child: OcrPanel(
+                      controller: widget.ocr!,
+                      translation: widget.translation,
+                    ),
                   ),
                   const SizedBox(height: 10),
                 ],
@@ -437,7 +487,7 @@ class _CaptureWindowState extends State<CaptureWindow>
               ),
               const Spacer(),
               const Text(
-                '文字本地识别 · 翻译尚未接入',
+                '本地识别 · 按需联网翻译',
                 style: TextStyle(fontSize: 12, color: Color(0xff708196)),
               ),
             ],

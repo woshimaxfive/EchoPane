@@ -22,4 +22,10 @@ Example manifest entry:
 flutter test integration_test/windows_ocr_test.dart -d windows --dart-define=ECHO_OCR_FIXTURES=C:/ocr-fixtures/manifest.json --dart-define=ECHO_TEST_ARTIFACTS=C:/ocr-fixtures/results
 ```
 
+The translation integration suite uses the same English/Japanese fixtures and a local HTTP server. It uses a separate Debug-only Windows credential target; no real API key is needed or written to the production credential. It validates the protocol and display lifecycle, not real translation quality:
+
+```powershell
+flutter test integration_test/windows_translation_test.dart -d windows --dart-define=ECHO_OCR_FIXTURES=C:/ocr-fixtures/manifest.json --dart-define=ECHO_TEST_ARTIFACTS=C:/ocr-fixtures/results
+```
+
 Create the result directory before running. Artifacts contain fixture text and a rendered application screenshot; use non-sensitive fixtures. This suite presents each image in a real Win32 window, captures it through the application's screen pipeline, then checks recognition updates, static-frame reuse, stopped-session results, and minimum window size. It also records timings and confidence values. Assertions cover selected text and lifecycle behavior; they do not establish general OCR accuracy or video performance. The app is moved over the fixture during the test to exercise self-window exclusion.
