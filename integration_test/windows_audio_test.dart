@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:echopane/main.dart' as app;
@@ -10,7 +9,9 @@ import 'package:echopane/subtitles/caption_source.dart';
 import 'package:echopane/subtitles/overlay_settings.dart';
 import 'package:echopane/translation/settings.dart';
 import 'package:echopane/translation/provider.dart';
+import 'package:echopane/history/history_exporter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -220,6 +221,100 @@ void main() {
         isNull,
         reason: 'Audio UI must fit the minimum size',
       );
+      final history = window.history!;
+      expect(history.length, greaterThanOrEqualTo(3));
+      expect(
+        history.entries.any((entry) => entry.translations.contains('音频测试译文')),
+        true,
+      );
+      await tester.tap(find.byKey(const Key('caption-history')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('history-list')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byKey(const Key('history-copy-all')));
+      await tester.pumpAndSettle();
+      expect(
+        (await Clipboard.getData(Clipboard.kTextPlain))!.text,
+        contains('音频测试译文'),
+      );
+      if (artifacts.isNotEmpty) {
+        final boundary = tester.firstRenderObject(
+          find.byKey(const Key('history-content')),
+        ) as RenderRepaintBoundary;
+        final image = await boundary.toImage(pixelRatio: 1.5);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File('$artifacts/history-window.png')
+            .writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      }
+      final exported = '${folder.path}/字幕记录.json';
+      final exporter = DesktopHistoryExporter(
+        choosePath: (_, _) async => exported,
+      );
+      await tester.runAsync(
+        () => exporter.save(history.snapshot(), HistoryFormat.json),
+      );
+      final stored =
+          jsonDecode(await File(exported).readAsString(encoding: utf8)) as Map;
+      expect((stored['entries'] as List).length, history.length);
+      expect(stored.toString(), contains('音频测试译文'));
+      await tester.tap(find.byKey(const Key('history-close')));
+      await tester.pumpAndSettle();
+      const dialogHelper = String.fromEnvironment('ECHO_SAVE_DIALOG_HELPER');
+      if (dialogHelper.isNotEmpty) {
+        final helper = await tester.runAsync(
+          () => Process.start('powershell', [
+            '-NoProfile',
+            '-File',
+            dialogHelper,
+            '-TargetPid',
+            '$pid',
+            '-Action',
+            'Cancel',
+          ]),
+        );
+        final cancelled = await tester.runAsync(
+          () => DesktopHistoryExporter().save(
+            history.snapshot(),
+            HistoryFormat.text,
+          ),
+        );
+        expect(cancelled, isNull);
+        expect(await tester.runAsync(() => helper!.exitCode), 0);
+        final nativePath = '${folder.path}${Platform.pathSeparator}原生字幕.txt';
+        final savingHelper = await tester.runAsync(
+          () => Process.start('powershell', [
+            '-NoProfile',
+            '-File',
+            dialogHelper,
+            '-TargetPid',
+            '$pid',
+            '-Action',
+            'Save',
+            '-Destination',
+            nativePath,
+          ]),
+        );
+        final saved = await tester.runAsync(
+          () => DesktopHistoryExporter().save(
+            history.snapshot(),
+            HistoryFormat.text,
+          ),
+        );
+        expect(await tester.runAsync(() => savingHelper!.exitCode), 0);
+        expect(saved, nativePath);
+        expect(
+          await File(nativePath).readAsString(encoding: utf8),
+          contains('音频测试译文'),
+        );
+      }
+      results.add({
+        'kind': 'history',
+        'entries': history.length,
+        'exportedJson': true,
+        'nativeSaveCancel': dialogHelper.isNotEmpty,
+        'nativeSaveFile': dialogHelper.isNotEmpty,
+      });
       await audio.stop();
       await audio.start();
       await audio.stop();

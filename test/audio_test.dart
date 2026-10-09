@@ -53,6 +53,33 @@ class _Source extends CaptionSource {
 }
 
 void main() {
+  test(
+    'audio exposes native segment revision through caption router',
+    () async {
+      final platform = FakeAudio();
+      final models = OcrModelStore(directory: 'unused')
+        ..phase = ModelPhase.ready;
+      final audio = AudioController(platform, models: models);
+      final screen = _Source();
+      final router = CaptionRouter(screen, audio)
+        ..select(RecognitionMode.audio);
+      try {
+        platform.state['revision'] = 10;
+        await audio.start();
+        expect(router.captionRevision, 10);
+        final words = List.of(audio.lines);
+        platform.state['revision'] = 11;
+        await audio.poll();
+        expect(router.captionRevision, 11);
+        expect(audio.lines, words);
+      } finally {
+        router.dispose();
+        screen.dispose();
+        audio.dispose();
+        models.dispose();
+      }
+    },
+  );
   test('stop drains pending audio start and ignores late snapshots', () async {
     final platform = FakeAudio()..pending = Completer<void>();
     final models = OcrModelStore(directory: 'unused')..phase = ModelPhase.ready;

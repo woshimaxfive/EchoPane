@@ -73,7 +73,7 @@ class AudioController extends CaptionSource {
   String? error;
   double level = 0;
   int samples = 0, dropped = 0, durationMs = 0;
-  int _generation = 0, _nativeSession = 0;
+  int _generation = 0, _nativeSession = 0, _nativeRevision = 0;
   bool _wanted = false, _polling = false, _disposed = false;
   Timer? _timer;
   Future<void>? _pendingStart;
@@ -87,6 +87,8 @@ class AudioController extends CaptionSource {
   List<String> get captionLines => lines;
   @override
   String get captionSession => '$_generation:$_nativeSession';
+  @override
+  int get captionRevision => _nativeRevision;
   @override
   int? get captionDisplayId => null;
   @override
@@ -202,6 +204,7 @@ class AudioController extends CaptionSource {
           error = '系统音频或语音识别暂不可用，请检查设备后重新开始';
         } else {
           _nativeSession = (state['session'] as num?)?.toInt() ?? 0;
+          _nativeRevision = (state['revision'] as num?)?.toInt() ?? 0;
           starting = state['loading'] == true;
           running = state['running'] == true;
           recognizing = state['recognizing'] == true;

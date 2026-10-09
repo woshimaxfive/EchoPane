@@ -18,6 +18,8 @@ import 'subtitles/overlay_settings.dart';
 import 'subtitles/caption_source.dart';
 import 'audio/audio_controller.dart';
 import 'audio/audio_panel.dart';
+import 'history/caption_history.dart';
+import 'history/history_dialog.dart';
 
 Future<void> main() => startApplication();
 
@@ -76,6 +78,11 @@ Future<void> startApplication({
     overlayPlatform ?? WindowsOverlayPlatform(),
     overlaySettingsStore ?? FileOverlaySettingsStore(),
   );
+  final history = CaptionHistory(
+    captions,
+    translation,
+    origin: () => captions.mode,
+  );
   runApp(
     EchoPaneApp(
       controller: controller,
@@ -84,6 +91,7 @@ Future<void> startApplication({
       overlay: overlay,
       audio: audio,
       captions: captions,
+      history: history,
     ),
   );
   await controller.initialize();
@@ -102,6 +110,7 @@ class EchoPaneApp extends StatelessWidget {
     this.overlay,
     this.audio,
     this.captions,
+    this.history,
   });
   final CaptureController controller;
   final OcrController? ocr;
@@ -109,6 +118,7 @@ class EchoPaneApp extends StatelessWidget {
   final OverlayController? overlay;
   final AudioController? audio;
   final CaptionRouter? captions;
+  final CaptionHistory? history;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -131,6 +141,7 @@ class EchoPaneApp extends StatelessWidget {
         overlay: overlay,
         audio: audio,
         captions: captions,
+        history: history,
       ),
     ),
   );
@@ -145,6 +156,7 @@ class CaptureWindow extends StatefulWidget {
     this.overlay,
     this.audio,
     this.captions,
+    this.history,
   });
   final CaptureController controller;
   final OcrController? ocr;
@@ -152,6 +164,7 @@ class CaptureWindow extends StatefulWidget {
   final OverlayController? overlay;
   final AudioController? audio;
   final CaptionRouter? captions;
+  final CaptionHistory? history;
 
   @override
   State<CaptureWindow> createState() => _CaptureWindowState();
@@ -355,6 +368,14 @@ class _CaptureWindowState extends State<CaptureWindow>
                                     },
                             ),
                     ),
+                    if (widget.history != null)
+                      IconButton(
+                        key: const Key('caption-history'),
+                        tooltip: '字幕记录',
+                        icon: const Icon(Icons.history, size: 20),
+                        onPressed: () =>
+                            showCaptionHistory(context, widget.history!),
+                      ),
                     if (widget.overlay != null)
                       TextButton.icon(
                         key: const Key('overlay-settings'),

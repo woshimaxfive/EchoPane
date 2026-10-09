@@ -262,10 +262,24 @@ void main() {
         }
         expect(translation.translations.first, contains('明天'));
         expect(translation.translations, isNot(contains('我们得在日出前离开。')));
+        expect(
+          window.history!.entries.any(
+            (entry) => entry.translations.contains('我们得在日出前离开。'),
+          ),
+          true,
+        );
+        expect(
+          window.history!.entries.any(
+            (entry) => entry.translations.any((text) => text.contains('明天')),
+          ),
+          true,
+        );
+        final historyCount = window.history!.length;
         await capture.stop();
         await tester.pump(const Duration(milliseconds: 500));
         expect(translation.originals, isEmpty);
         expect(translation.translations, isEmpty);
+        expect(window.history!.length, historyCount);
         await windowManager.setSize(const Size(680, 520));
         await tester.pump(const Duration(milliseconds: 500));
         expect(tester.takeException(), isNull);

@@ -6,6 +6,9 @@ abstract class CaptionSource extends ChangeNotifier {
   String? get captionError;
   List<String> get captionLines;
   String get captionSession;
+
+  /// Distinguishes separate speech segments with identical recognized text.
+  int get captionRevision => 0;
   int? get captionDisplayId;
   String get waitingCaption;
 }
@@ -37,6 +40,8 @@ class CaptionRouter extends CaptionSource {
   List<String> get captionLines => active.captionLines;
   @override
   String get captionSession => '${mode.name}:${active.captionSession}';
+  @override
+  int get captionRevision => active.captionRevision;
   @override
   int? get captionDisplayId => screen.captionDisplayId;
   @override
