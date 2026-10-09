@@ -21,6 +21,10 @@
 #include <string>
 #include <future>
 #include <vector>
+#ifndef NDEBUG
+#include <filesystem>
+#include <fstream>
+#endif
 
 using flutter::EncodableList;
 using flutter::EncodableMap;
@@ -197,11 +201,7 @@ bool SelectRegion(const Display& display, RECT& rectangle) {
   return selection.accepted;
 }
 
-struct Pixels {
-  std::vector<uint8_t> bytes;
-  int width = 0;
-  int height = 0;
-};
+using Pixels = CapturePixels;
 
 struct PixelLease {
   std::shared_ptr<Pixels> pixels;
@@ -312,6 +312,7 @@ ScreenCapture::~ScreenCapture() {
 }
 
 void ScreenCapture::Stop() {
+  ocr_.Reset();
   if (state_) {
     state_->running = false;
     { std::lock_guard lock(state_->processing); }
@@ -339,6 +340,21 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
                           std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
   try {
     const auto method = call.method_name();
+    if (method == "ocrLoad") {
+      const auto& arguments = std::get<EncodableMap>(*call.arguments());
+      ocr_.Load(std::get<std::string>(arguments.at(EncodableValue("directory"))));
+      result->Success();
+      return;
+    }
+    if (method == "ocrSnapshot") {
+      if (state_ && state_->running) {
+        std::shared_ptr<Pixels> pixels;
+        { std::lock_guard lock(state_->pixels_mutex); pixels = state_->latest; }
+        if (pixels) ocr_.Submit(std::move(pixels));
+      }
+      result->Success(EncodableValue(ocr_.Snapshot()));
+      return;
+    }
     if (method == "displays") {
       EncodableList values;
       const auto displays = Displays();
@@ -388,12 +404,44 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
       return;
     }
 #ifndef NDEBUG
+    auto read_fixture = [&call]() {
+      const auto& options = std::get<EncodableMap>(*call.arguments());
+      auto pixels = std::make_shared<CapturePixels>();
+      pixels->width = Integer(options, "width");
+      pixels->height = Integer(options, "height");
+      if (pixels->width < 8 || pixels->height < 8 || pixels->width > 1920 || pixels->height > 1080)
+        throw std::runtime_error("Invalid test image dimensions");
+      const auto& path = std::get<std::string>(options.at(EncodableValue("path")));
+      const auto utf8_path = std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size());
+      std::ifstream input(std::filesystem::path(utf8_path), std::ios::binary);
+      pixels->bytes.resize(static_cast<size_t>(pixels->width) * pixels->height * 4);
+      if (!input.read(reinterpret_cast<char*>(pixels->bytes.data()), pixels->bytes.size()))
+        throw std::runtime_error("Could not read test image");
+      for (size_t index = 0; index < pixels->bytes.size(); index += 4)
+        std::swap(pixels->bytes[index], pixels->bytes[index + 2]); // RGBA fixture to GDI BGRA.
+      return pixels;
+    };
+    if (method == "debugUpdateFixture") {
+      if (!fixture_) throw std::runtime_error("Test window is absent");
+      fixture_pixels_ = read_fixture();
+      SetWindowLongPtr(fixture_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(fixture_pixels_.get()));
+      InvalidateRect(fixture_, nullptr, FALSE);
+      UpdateWindow(fixture_);
+      DwmFlush();
+      result->Success();
+      return;
+    }
     if (method == "debugCreateFixture") {
       Stop();
       if (fixture_) DestroyWindow(fixture_);
+      fixture_pixels_.reset();
+      if (call.arguments() && !std::holds_alternative<std::monostate>(*call.arguments()))
+        fixture_pixels_ = read_fixture();
+      const int width = fixture_pixels_ ? fixture_pixels_->width : 420;
+      const int height = fixture_pixels_ ? fixture_pixels_->height : 240;
       const auto display = Displays().front();
       fixture_ = CreateWindowExW(0, L"STATIC", L"EchoPane capture fixture", WS_POPUP | WS_VISIBLE,
-          display.bounds.left + 60, display.bounds.top + 60, 420, 240,
+          display.bounds.left + 60, display.bounds.top + 60, width, height,
           nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
       if (!fixture_) throw std::runtime_error("Fixture creation failed");
       SetWindowLongPtr(fixture_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(+[](
@@ -402,23 +450,38 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
           PAINTSTRUCT paint{};
           HDC dc = BeginPaint(window, &paint);
           RECT bounds{}; GetClientRect(window, &bounds);
-          HBRUSH brush = CreateSolidBrush(RGB(32, 176, 112));
-          FillRect(dc, &bounds, brush); DeleteObject(brush);
+          const auto* pixels = reinterpret_cast<CapturePixels*>(GetWindowLongPtr(window, GWLP_USERDATA));
+          if (pixels) {
+            BITMAPINFO bitmap{};
+            bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bitmap.bmiHeader.biWidth = pixels->width;
+            bitmap.bmiHeader.biHeight = -pixels->height;
+            bitmap.bmiHeader.biPlanes = 1;
+            bitmap.bmiHeader.biBitCount = 32;
+            bitmap.bmiHeader.biCompression = BI_RGB;
+            SetDIBitsToDevice(dc, 0, 0, pixels->width, pixels->height, 0, 0, 0,
+                pixels->height, pixels->bytes.data(), &bitmap, DIB_RGB_COLORS);
+          } else {
+            HBRUSH brush = CreateSolidBrush(RGB(32, 176, 112));
+            FillRect(dc, &bounds, brush); DeleteObject(brush);
+          }
           EndPaint(window, &paint); return 0;
         }
         return DefWindowProc(window, message, wparam, lparam);
       }));
+      SetWindowLongPtr(fixture_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(fixture_pixels_.get()));
       InvalidateRect(fixture_, nullptr, TRUE);
       UpdateWindow(fixture_);
       SetWindowPos(window_, HWND_TOPMOST, display.bounds.left + 60, display.bounds.top + 60,
           MulDiv(900, GetDpiForWindow(window_), 96), MulDiv(660, GetDpiForWindow(window_), 96), SWP_SHOWWINDOW);
-      RECT crop{60, 60, 480, 300};
+      RECT crop{60, 60, 60 + width, 60 + height};
       result->Success(EncodableValue(RegionMap(crop)));
       return;
     }
     if (method == "debugDestroyFixture") {
       if (fixture_) DestroyWindow(fixture_);
       fixture_ = nullptr;
+      fixture_pixels_.reset();
       result->Success();
       return;
     }

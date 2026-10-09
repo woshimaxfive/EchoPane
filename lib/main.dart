@@ -4,6 +4,9 @@ import 'package:window_manager/window_manager.dart';
 
 import 'capture/capture_controller.dart';
 import 'capture/capture_platform.dart';
+import 'ocr/model_store.dart';
+import 'ocr/ocr_controller.dart';
+import 'ocr/ocr_panel.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,8 +26,8 @@ Future<void> main() async {
   await windowManager.setAsFrameless();
   await windowManager.waitUntilReadyToShow(
     const WindowOptions(
-      size: Size(900, 660),
-      minimumSize: Size(580, 400),
+      size: Size(900, 720),
+      minimumSize: Size(680, 520),
       center: true,
       backgroundColor: Colors.transparent,
       title: 'EchoPane · 随幕',
@@ -35,13 +38,17 @@ Future<void> main() async {
     },
   );
   final controller = CaptureController(WindowsCapturePlatform());
-  runApp(EchoPaneApp(controller: controller));
+  final models = OcrModelStore();
+  final ocr = OcrController(controller, models, WindowsOcrPlatform());
+  runApp(EchoPaneApp(controller: controller, ocr: ocr));
   await controller.initialize();
+  await models.check();
 }
 
 class EchoPaneApp extends StatelessWidget {
-  const EchoPaneApp({super.key, required this.controller});
+  const EchoPaneApp({super.key, required this.controller, this.ocr});
   final CaptureController controller;
+  final OcrController? ocr;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -57,14 +64,15 @@ class EchoPaneApp extends StatelessWidget {
     ),
     home: RepaintBoundary(
       key: const Key('window-content'),
-      child: CaptureWindow(controller: controller),
+      child: CaptureWindow(controller: controller, ocr: ocr),
     ),
   );
 }
 
 class CaptureWindow extends StatefulWidget {
-  const CaptureWindow({super.key, required this.controller});
+  const CaptureWindow({super.key, required this.controller, this.ocr});
   final CaptureController controller;
+  final OcrController? ocr;
 
   @override
   State<CaptureWindow> createState() => _CaptureWindowState();
@@ -220,7 +228,7 @@ class _CaptureWindowState extends State<CaptureWindow>
                   children: [
                     const Expanded(
                       child: Text(
-                        '屏幕预览',
+                        '屏幕识别',
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w600,
@@ -244,7 +252,7 @@ class _CaptureWindowState extends State<CaptureWindow>
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  '选择关注的画面，捕获内容仅在本机预览。',
+                  '选择关注的画面，截图和文字识别都在本机处理。',
                   style: TextStyle(color: Color(0xff708196)),
                 ),
                 const SizedBox(height: 14),
@@ -301,33 +309,45 @@ class _CaptureWindowState extends State<CaptureWindow>
                       borderRadius: BorderRadius.circular(9),
                     ),
                     child: state.textureId == null
-                        ? Center(
-                            child: Padding(
-                              padding: const EdgeInsets.all(24),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(
-                                    Icons.crop_free,
-                                    size: 38,
-                                    color: Color(0xff708196),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
+                        ? LayoutBuilder(
+                            builder: (context, constraints) {
+                              if (constraints.maxHeight < 160) {
+                                return Center(
+                                  child: Text(
                                     state.error ?? '框选一个区域，或选择整块屏幕',
                                     textAlign: TextAlign.center,
                                   ),
-                                  const SizedBox(height: 7),
-                                  const Text(
-                                    '点击开始后显示实时画面',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: Color(0xff708196),
-                                    ),
+                                );
+                              }
+                              return Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(24),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.crop_free,
+                                        size: 38,
+                                        color: Color(0xff708196),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        state.error ?? '框选一个区域，或选择整块屏幕',
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      const SizedBox(height: 7),
+                                      const Text(
+                                        '点击开始后显示实时画面',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: Color(0xff708196),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                            ),
+                                ),
+                              );
+                            },
                           )
                         : Center(
                             child: AspectRatio(
@@ -348,6 +368,14 @@ class _CaptureWindowState extends State<CaptureWindow>
                   ),
                 ),
                 const SizedBox(height: 12),
+                if (widget.ocr != null) ...[
+                  const Divider(height: 1, color: Color(0xffdae2e7)),
+                  SizedBox(
+                    height: 138,
+                    child: OcrPanel(controller: widget.ocr!),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 Row(
                   children: [
                     Expanded(
@@ -409,7 +437,7 @@ class _CaptureWindowState extends State<CaptureWindow>
               ),
               const Spacer(),
               const Text(
-                '文字识别与翻译尚未接入',
+                '文字本地识别 · 翻译尚未接入',
                 style: TextStyle(fontSize: 12, color: Color(0xff708196)),
               ),
             ],

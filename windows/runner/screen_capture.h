@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <memory>
+#include "ocr_service.h"
 
 class ScreenCapture {
  public:
@@ -27,8 +28,10 @@ class ScreenCapture {
   std::unique_ptr<flutter::TextureVariant> texture_;
   int64_t texture_id_ = -1;
   std::shared_ptr<State> state_;
+  OcrService ocr_;
 #ifndef NDEBUG
   HWND fixture_ = nullptr;
+  std::shared_ptr<CapturePixels> fixture_pixels_;
 #endif
 };
 
