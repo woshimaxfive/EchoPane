@@ -8,6 +8,12 @@ flutter test integration_test/windows_subtitles_test.dart -d windows --dart-defi
 
 The tests require a Windows interactive desktop, Flutter's Windows build tools, and the native OCR dependencies described in the project README. Test-only native methods are excluded from Release builds.
 
+The screen translation suite generates owned English/Japanese page fixtures with room for bilingual text and uses injected translations with isolated settings. It checks physical-coordinate window placement, both display modes, click-through input, visible-overlay OCR feedback prevention, capture exclusion, blank-frame clearing, stop and hide-hotkey behavior, and minimum window size. It records overlay screenshots and remote sampling times. It does not measure cloud translation quality, real-video performance, or acceptance in a specific remote-desktop product. Keep the desktop unlocked and the display active during capture tests.
+
+```powershell
+flutter test integration_test/windows_screen_translation_test.dart -d windows --dart-define=ECHO_TEST_ARTIFACTS=C:/ocr-fixtures/results
+```
+
 Run capture regression:
 
 ```powershell

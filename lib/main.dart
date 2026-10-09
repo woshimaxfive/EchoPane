@@ -20,6 +20,10 @@ import 'audio/audio_controller.dart';
 import 'audio/audio_panel.dart';
 import 'history/caption_history.dart';
 import 'history/history_dialog.dart';
+import 'screen_translation/screen_controller.dart';
+import 'screen_translation/screen_dialog.dart';
+import 'screen_translation/screen_platform.dart';
+import 'screen_translation/screen_settings.dart';
 
 Future<void> main() => startApplication();
 
@@ -29,6 +33,8 @@ Future<void> startApplication({
   TranslationProvider? translationProvider,
   OverlayPlatform? overlayPlatform,
   OverlaySettingsStore? overlaySettingsStore,
+  ScreenOverlayPlatform? screenOverlayPlatform,
+  ScreenOverlaySettingsStore? screenOverlaySettingsStore,
 }) async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
@@ -42,6 +48,7 @@ Future<void> startApplication({
         MenuItem(key: 'subtitles', label: '显示悬浮字幕'),
         MenuItem(key: 'subtitle_restore', label: '恢复字幕操作'),
         MenuItem(key: 'subtitle_hide', label: '隐藏悬浮字幕'),
+        MenuItem(key: 'screen_hide', label: '隐藏原位译文'),
         MenuItem.separator(),
         MenuItem(key: 'quit', label: '退出'),
       ],
@@ -83,6 +90,13 @@ Future<void> startApplication({
     translation,
     origin: () => captions.mode,
   );
+  final screenOverlay = ScreenOverlayController(
+    ocr,
+    captions,
+    translation,
+    screenOverlayPlatform ?? WindowsScreenOverlayPlatform(),
+    screenOverlaySettingsStore ?? FileScreenOverlaySettingsStore(),
+  );
   runApp(
     EchoPaneApp(
       controller: controller,
@@ -92,12 +106,14 @@ Future<void> startApplication({
       audio: audio,
       captions: captions,
       history: history,
+      screenOverlay: screenOverlay,
     ),
   );
   await controller.initialize();
   await models.check();
   await translation.initialize();
   await overlay.initialize();
+  await screenOverlay.initialize();
   await audio.initialize();
 }
 
@@ -111,6 +127,7 @@ class EchoPaneApp extends StatelessWidget {
     this.audio,
     this.captions,
     this.history,
+    this.screenOverlay,
   });
   final CaptureController controller;
   final OcrController? ocr;
@@ -119,6 +136,7 @@ class EchoPaneApp extends StatelessWidget {
   final AudioController? audio;
   final CaptionRouter? captions;
   final CaptionHistory? history;
+  final ScreenOverlayController? screenOverlay;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -142,6 +160,7 @@ class EchoPaneApp extends StatelessWidget {
         audio: audio,
         captions: captions,
         history: history,
+        screenOverlay: screenOverlay,
       ),
     ),
   );
@@ -157,6 +176,7 @@ class CaptureWindow extends StatefulWidget {
     this.audio,
     this.captions,
     this.history,
+    this.screenOverlay,
   });
   final CaptureController controller;
   final OcrController? ocr;
@@ -165,6 +185,7 @@ class CaptureWindow extends StatefulWidget {
   final AudioController? audio;
   final CaptionRouter? captions;
   final CaptionHistory? history;
+  final ScreenOverlayController? screenOverlay;
 
   @override
   State<CaptureWindow> createState() => _CaptureWindowState();
@@ -186,6 +207,7 @@ class _CaptureWindowState extends State<CaptureWindow>
   @override
   void onWindowClose() async {
     await widget.overlay?.close();
+    await widget.screenOverlay?.close();
     await widget.controller.stop();
     await widget.audio?.stop();
     await trayManager.destroy();
@@ -223,6 +245,8 @@ class _CaptureWindowState extends State<CaptureWindow>
         widget.overlay?.show(true, restore: true);
       case 'subtitle_hide':
         widget.overlay?.close();
+      case 'screen_hide':
+        widget.screenOverlay?.setEnabled(false);
       case 'quit':
         onWindowClose();
     }
@@ -566,6 +590,16 @@ class _CaptureWindowState extends State<CaptureWindow>
                           ),
                         ),
                       ),
+                      if (widget.screenOverlay != null)
+                        TextButton.icon(
+                          key: const Key('screen-overlay-settings'),
+                          onPressed: () => showScreenOverlaySettings(
+                            context,
+                            widget.screenOverlay!,
+                          ),
+                          icon: const Icon(Icons.translate, size: 18),
+                          label: const Text('原位翻译'),
+                        ),
                       if (state.snapshot != null)
                         Text(
                           '已捕获 ${state.snapshot!.frames} 帧',

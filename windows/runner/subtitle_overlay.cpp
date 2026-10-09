@@ -8,7 +8,6 @@
 
 namespace {
 constexpr wchar_t kClass[] = L"EchoPaneSubtitleOverlay";
-constexpr int kHotkey = 0x5E01;
 constexpr int kMaximumWidth = 2400;
 constexpr int kMaximumHeight = 1200;
 int Integer(const flutter::EncodableMap& map, const char* name) {
@@ -22,10 +21,10 @@ HMONITOR Monitor(const flutter::EncodableValue& value) {
 }
 }
 
-SubtitleOverlay::SubtitleOverlay(flutter::FlutterEngine* engine, HWND main_window)
-    : main_window_(main_window) {
+SubtitleOverlay::SubtitleOverlay(flutter::FlutterEngine* engine, HWND main_window, bool spatial)
+    : main_window_(main_window), spatial_(spatial) {
   channel_ = std::make_unique<flutter::MethodChannel<Value>>(engine->messenger(),
-      "echopane/subtitle_overlay", &flutter::StandardMethodCodec::GetInstance());
+      spatial_ ? "echopane/screen_overlay" : "echopane/subtitle_overlay", &flutter::StandardMethodCodec::GetInstance());
   channel_->SetMethodCallHandler([this](const auto& call, auto result) {
     Handle(call, std::move(result));
   });
@@ -35,7 +34,7 @@ SubtitleOverlay::~SubtitleOverlay() {
   channel_->SetMethodCallHandler(nullptr);
   if (window_) {
     KillTimer(window_, 1);
-    if (hotkey_) UnregisterHotKey(window_, kHotkey);
+    if (hotkey_) UnregisterHotKey(window_, HotkeyId());
     SetWindowLongPtr(window_, GWLP_USERDATA, 0);
     DestroyWindow(window_);
   }
@@ -46,12 +45,12 @@ void SubtitleOverlay::EnsureWindow(bool allow_capture) {
   WNDCLASSW wc{};
   wc.lpfnWndProc = WindowProc;
   wc.hInstance = GetModuleHandle(nullptr);
-  wc.lpszClassName = kClass;
+  wc.lpszClassName = spatial_ ? L"EchoPaneScreenOverlay" : kClass;
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
   if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
     throw std::runtime_error("Overlay class registration failed");
   window_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE |
-      WS_EX_TOPMOST, kClass, L"EchoPane · 悬浮字幕", WS_POPUP | WS_THICKFRAME,
+      WS_EX_TOPMOST, wc.lpszClassName, spatial_ ? L"EchoPane · 原位翻译" : L"EchoPane · 悬浮字幕", WS_POPUP | (spatial_ ? 0 : WS_THICKFRAME),
       0, 0, 720, 220, nullptr, nullptr, wc.hInstance, this);
   if (!window_) throw std::runtime_error("Overlay creation failed");
   if (!SetWindowDisplayAffinity(window_, allow_capture ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE)) {
@@ -60,7 +59,7 @@ void SubtitleOverlay::EnsureWindow(bool allow_capture) {
     window_ = nullptr;
     throw std::runtime_error("Overlay capture exclusion failed");
   }
-  hotkey_ = RegisterHotKey(window_, kHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'S') != 0;
+  hotkey_ = RegisterHotKey(window_, HotkeyId(), MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, spatial_ ? 'T' : 'S') != 0;
   Place(MonitorFromWindow(main_window_, MONITOR_DEFAULTTONEAREST));
 }
 
@@ -111,8 +110,10 @@ SubtitleOverlay::Map SubtitleOverlay::Snapshot() const {
   };
 }
 
-void SubtitleOverlay::Notify() {
-  channel_->InvokeMethod("state", std::make_unique<Value>(Snapshot()));
+void SubtitleOverlay::Notify(bool dismissed) {
+  auto state = Snapshot();
+  state[Value("dismissed")] = Value(dismissed);
+  channel_->InvokeMethod("state", std::make_unique<Value>(std::move(state)));
 }
 
 void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
@@ -130,8 +131,27 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
         EnsureWindow(allow_capture);
         if (!SetWindowDisplayAffinity(window_, allow_capture ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE))
           throw std::runtime_error("Overlay capture policy update failed");
-        if (!hotkey_) hotkey_ = RegisterHotKey(window_, kHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'S') != 0;
-        if (std::get<bool>(args.at(Value("restore")))) {
+        if (!hotkey_) hotkey_ = RegisterHotKey(window_, HotkeyId(), MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, spatial_ ? 'T' : 'S') != 0;
+        if (spatial_) {
+          MONITORINFO info{sizeof(MONITORINFO)};
+          if (!GetMonitorInfo(Monitor(args.at(Value("displayId"))), &info))
+            throw std::runtime_error("Screen overlay monitor unavailable");
+          RECT region{0, 0, info.rcMonitor.right - info.rcMonitor.left, info.rcMonitor.bottom - info.rcMonitor.top};
+          if (const auto selected = args.find(Value("region")); selected != args.end()) {
+            const auto& values = std::get<Map>(selected->second);
+            const int x = Integer(values, "x"), y = Integer(values, "y");
+            const int width = Integer(values, "width"), height = Integer(values, "height");
+            if (x < 0 || y < 0 || width < 1 || height < 1 || x >= region.right || y >= region.bottom ||
+                width > region.right - x || height > region.bottom - y)
+              throw std::runtime_error("Screen overlay region unavailable");
+            region = {x, y, x + width, y + height};
+          }
+          const int width = region.right - region.left, height = region.bottom - region.top;
+          if (width > 8192 || height > 8192 || static_cast<int64_t>(width) * height > 33554432)
+            throw std::runtime_error("Screen overlay region too large");
+          SetWindowPos(window_, HWND_TOPMOST, info.rcMonitor.left + region.left, info.rcMonitor.top + region.top,
+              width, height, SWP_NOACTIVATE);
+        } else if (std::get<bool>(args.at(Value("restore")))) {
           HMONITOR monitor = MonitorFromWindow(main_window_, MONITOR_DEFAULTTONEAREST);
           if (const auto id = args.find(Value("displayId")); id != args.end()) {
             auto candidate = Monitor(id->second);
@@ -140,14 +160,14 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
           }
           Place(monitor);
         }
-        if (!Lock(std::get<bool>(args.at(Value("locked")))))
+        if (!Lock(spatial_ || std::get<bool>(args.at(Value("locked")))))
           throw std::runtime_error("Overlay input style update failed");
         SetWindowPos(window_, HWND_TOPMOST, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
       } else if (window_) {
         ShowWindow(window_, SW_HIDE);
         Lock(false);
-        if (hotkey_) { UnregisterHotKey(window_, kHotkey); hotkey_ = false; }
+        if (hotkey_) { UnregisterHotKey(window_, HotkeyId()); hotkey_ = false; }
       }
       result->Success(Value(Snapshot()));
     } else if (method == "frame") {
@@ -155,7 +175,8 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
       const auto& args = std::get<Map>(*call.arguments());
       const int width = Integer(args, "width"), height = Integer(args, "height");
       const auto& rgba = std::get<std::vector<uint8_t>>(args.at(Value("rgba")));
-      if (width < 1 || height < 1 || width > kMaximumWidth || height > kMaximumHeight ||
+      if (width < 1 || height < 1 || width > (spatial_ ? 8192 : kMaximumWidth) || height > (spatial_ ? 8192 : kMaximumHeight) ||
+          static_cast<int64_t>(width) * height > 33554432 ||
           rgba.size() != static_cast<size_t>(width) * height * 4)
         throw std::runtime_error("Invalid overlay frame");
       RECT bounds{}; GetWindowRect(window_, &bounds);
@@ -203,7 +224,7 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
       SetWindowPos(window_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
       result->Success(Value(Snapshot()));
     } else if (method == "debugHotkey") {
-      SendMessage(window_, WM_HOTKEY, kHotkey, 0);
+      SendMessage(window_, WM_HOTKEY, HotkeyId(), 0);
       result->Success(Value(Snapshot()));
     } else if (method == "debugClose") {
       SendMessage(window_, WM_CLOSE, 0, 0);
@@ -222,7 +243,7 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
       RECT r{}; GetWindowRect(window_, &r);
       const int width = r.right - r.left, height = r.bottom - r.top;
       if (!window_ || !IsWindowVisible(window_) || width < 1 || height < 1 ||
-          width > kMaximumWidth || height > kMaximumHeight)
+          width > (spatial_ ? 8192 : kMaximumWidth) || height > (spatial_ ? 8192 : kMaximumHeight))
         throw std::runtime_error("No test overlay");
       DWORD previous_affinity = WDA_NONE;
       if (!GetWindowDisplayAffinity(window_, &previous_affinity) ||
@@ -264,7 +285,7 @@ void SubtitleOverlay::Handle(const flutter::MethodCall<Value>& call,
       result->NotImplemented();
     }
   } catch (...) {
-    result->Error("overlay", "悬浮字幕操作失败，请重试或恢复字幕位置");
+    result->Error("overlay", spatial_ ? "原位翻译操作失败，请重新选择捕获范围" : "悬浮字幕操作失败，请重试或恢复字幕位置");
   }
 }
 
@@ -301,17 +322,24 @@ LRESULT CALLBACK SubtitleOverlay::WindowProc(HWND hwnd, UINT message, WPARAM wpa
     case WM_NCLBUTTONDBLCLK: return 0;
     case WM_CLOSE:
       ShowWindow(hwnd, SW_HIDE); self->Lock(false);
-      if (self->hotkey_) { UnregisterHotKey(hwnd, kHotkey); self->hotkey_ = false; }
-      self->Notify(); return 0;
+      if (self->hotkey_) { UnregisterHotKey(hwnd, self->HotkeyId()); self->hotkey_ = false; }
+      self->Notify(true); return 0;
     case WM_HOTKEY:
-      if (wparam == kHotkey) { self->Lock(false); self->Notify(); }
+      if (wparam == self->HotkeyId()) {
+        if (self->spatial_) { SendMessage(hwnd, WM_CLOSE, 0, 0); }
+        else { self->Lock(false); self->Notify(); }
+      }
       return 0;
     case WM_GETMINMAXINFO: {
       auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
+      if (self->spatial_) {
+        limits->ptMinTrackSize = {1, 1}; limits->ptMaxTrackSize = {8192, 8192}; return 0;
+      }
       limits->ptMinTrackSize = {MulDiv(280, dpi, 96), MulDiv(120, dpi, 96)};
       limits->ptMaxTrackSize = {kMaximumWidth, kMaximumHeight}; return 0;
     }
     case WM_DPICHANGED: {
+      if (self->spatial_) { SetTimer(hwnd, 1, 60, nullptr); return 0; }
       const auto& r = *reinterpret_cast<RECT*>(lparam);
       SetWindowPos(hwnd, HWND_TOPMOST, r.left, r.top,
           std::min(static_cast<int>(r.right - r.left), kMaximumWidth),
@@ -322,6 +350,7 @@ LRESULT CALLBACK SubtitleOverlay::WindowProc(HWND hwnd, UINT message, WPARAM wpa
     case WM_TIMER:
       if (wparam == 1) { KillTimer(hwnd, 1); self->Notify(); } return 0;
     case WM_DISPLAYCHANGE:
+      if (self->spatial_) { SendMessage(hwnd, WM_CLOSE, 0, 0); return 0; }
       try { self->Place(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)); } catch (...) {}
       SetTimer(hwnd, 1, 60, nullptr); return 0;
   }

@@ -15,6 +15,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
+#include <cwchar>
 #include <mutex>
 #include <limits>
 #include <stdexcept>
@@ -208,6 +210,80 @@ struct PixelLease {
   std::shared_ptr<Pixels> pixels;
   FlutterDesktopPixelBuffer buffer{};
 };
+
+// Remote-visible layered translations must not become OCR input. This scoped
+// GDI sample hides only this process's visible overlays and restores them even
+// when capture fails. WGC remains the regular capture/preview path.
+std::shared_ptr<Pixels> SampleBehindOverlays(const RECT& bounds) {
+  struct OwnedOverlays {
+    const RECT& bounds;
+    std::vector<HWND> windows;
+  } owned{bounds, {}};
+  // Another running instance may have the same classes. Enumerate by owner
+  // rather than accepting the first window with a matching class name.
+  EnumWindows(+[](HWND window, LPARAM parameter) -> BOOL {
+    auto& owned = *reinterpret_cast<OwnedOverlays*>(parameter);
+    DWORD process = 0, affinity = 0;
+    RECT window_bounds{}, intersection{};
+    GetWindowThreadProcessId(window, &process);
+    if (process != GetCurrentProcessId() || !IsWindowVisible(window)) return TRUE;
+    wchar_t name[64]{};
+    GetClassNameW(window, name, 64);
+    if (std::wcscmp(name, L"EchoPaneScreenOverlay") != 0 &&
+        std::wcscmp(name, L"EchoPaneSubtitleOverlay") != 0) return TRUE;
+    if (GetWindowRect(window, &window_bounds) && IntersectRect(&intersection, &window_bounds, &owned.bounds) &&
+        GetWindowDisplayAffinity(window, &affinity) && affinity == WDA_NONE)
+      owned.windows.push_back(window);
+    return TRUE;
+  }, reinterpret_cast<LPARAM>(&owned));
+  const auto& overlays = owned.windows;
+  if (overlays.empty()) return nullptr;
+  const int width = bounds.right - bounds.left, height = bounds.bottom - bounds.top;
+  if (width < 1 || height < 1 || width > 8192 || height > 8192 ||
+      static_cast<int64_t>(width) * height > 33554432)
+    throw std::runtime_error("远程兼容取样范围过大，请缩小识别区域");
+  auto pixels = std::make_shared<Pixels>();
+  pixels->width = width; pixels->height = height;
+  pixels->bytes.resize(static_cast<size_t>(width) * height * 4);
+  struct SampleResources {
+    HDC desktop = nullptr, dc = nullptr;
+    HBITMAP bitmap = nullptr;
+    HGDIOBJ previous = nullptr;
+    std::vector<HWND> hidden;
+    ~SampleResources() {
+      for (const auto window : hidden) if (IsWindow(window))
+        SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+      if (previous) SelectObject(dc, previous);
+      if (bitmap) DeleteObject(bitmap);
+      if (dc) DeleteDC(dc);
+      if (desktop) ReleaseDC(nullptr, desktop);
+    }
+  } sample;
+  sample.desktop = GetDC(nullptr);
+  if (!sample.desktop) throw std::runtime_error("无法读取桌面画面");
+  sample.dc = CreateCompatibleDC(sample.desktop);
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = width; info.bmiHeader.biHeight = -height;
+  info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32; info.bmiHeader.biCompression = BI_RGB;
+  void* data = nullptr;
+  sample.bitmap = CreateDIBSection(sample.desktop, &info, DIB_RGB_COLORS, &data, nullptr, 0);
+  if (!sample.dc || !sample.bitmap) throw std::runtime_error("无法创建远程兼容取样");
+  sample.previous = SelectObject(sample.dc, sample.bitmap);
+  sample.hidden = overlays;
+  for (const auto window : overlays) ShowWindow(window, SW_HIDE);
+  if (FAILED(DwmFlush()) || !BitBlt(sample.dc, 0, 0, width, height, sample.desktop,
+      bounds.left, bounds.top, SRCCOPY | CAPTUREBLT))
+    throw std::runtime_error("无法获取译文下方画面，请关闭远程兼容后重试");
+  std::memcpy(pixels->bytes.data(), data, pixels->bytes.size());
+  for (const auto window : sample.hidden)
+    SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  sample.hidden.clear();
+  for (size_t i = 0; i < pixels->bytes.size(); i += 4) {
+    std::swap(pixels->bytes[i], pixels->bytes[i + 2]); pixels->bytes[i + 3] = 255;
+  }
+  return pixels;
+}
 }  // namespace
 
 struct ScreenCapture::State {
@@ -219,6 +295,8 @@ struct ScreenCapture::State {
   uint64_t frames = 0;
   std::chrono::steady_clock::time_point last_frame{};
   RECT crop{};
+  RECT display_bounds{};
+  int remote_samples = 0, remote_sample_ms = 0;
   winrt::com_ptr<ID3D11Device> device;
   winrt::com_ptr<ID3D11DeviceContext> context;
   winrt::com_ptr<ID3D11Texture2D> staging;
@@ -350,7 +428,15 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
     if (method == "ocrSnapshot") {
       if (state_ && state_->running) {
         std::shared_ptr<Pixels> pixels;
-        { std::lock_guard lock(state_->pixels_mutex); pixels = state_->latest; }
+        const auto started = std::chrono::steady_clock::now();
+        const RECT bounds{state_->display_bounds.left + state_->crop.left, state_->display_bounds.top + state_->crop.top,
+            state_->display_bounds.left + state_->crop.right, state_->display_bounds.top + state_->crop.bottom};
+        pixels = SampleBehindOverlays(bounds);
+        if (pixels) {
+          ++state_->remote_samples;
+          state_->remote_sample_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - started).count());
+        } else { std::lock_guard lock(state_->pixels_mutex); pixels = state_->latest; }
         if (pixels) ocr_.Submit(std::move(pixels));
       }
       result->Success(EncodableValue(ocr_.Snapshot()));
@@ -381,6 +467,8 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
                          {EncodableValue("width"), EncodableValue(0)},
                          {EncodableValue("height"), EncodableValue(0)}};
       if (state_) {
+        value[EncodableValue("remoteSamples")] = EncodableValue(state_->remote_samples);
+        value[EncodableValue("remoteSampleMs")] = EncodableValue(state_->remote_sample_ms);
         std::lock_guard lock(state_->pixels_mutex);
         value[EncodableValue("frames")] = EncodableValue(static_cast<int64_t>(state_->frames));
         if (state_->latest) {
@@ -405,6 +493,15 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
       return;
     }
 #ifndef NDEBUG
+    if (method == "debugCapturedFixture") {
+      if (!fixture_ || !state_) throw std::runtime_error("Owned capture fixture required");
+      std::lock_guard lock(state_->pixels_mutex);
+      if (!state_->latest) throw std::runtime_error("No fixture frame");
+      const auto& pixels = *state_->latest;
+      result->Success(EncodableValue(EncodableMap{{EncodableValue("width"), EncodableValue(pixels.width)},
+          {EncodableValue("height"), EncodableValue(pixels.height)}, {EncodableValue("rgba"), EncodableValue(pixels.bytes)}}));
+      return;
+    }
     auto read_fixture = [&call]() {
       const auto& options = std::get<EncodableMap>(*call.arguments());
       auto pixels = std::make_shared<CapturePixels>();
@@ -572,6 +669,7 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
     auto state = std::make_shared<State>();
     state_ = state;
     state->crop = crop;
+    state->display_bounds = display.bounds;
     state->registrar = registrar_;
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
     D3D_FEATURE_LEVEL level{};

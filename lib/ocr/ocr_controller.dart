@@ -10,9 +10,18 @@ import '../subtitles/caption_stabilizer.dart';
 import '../subtitles/caption_source.dart';
 
 class OcrLine {
-  const OcrLine(this.text, this.confidence);
+  const OcrLine(
+    this.text,
+    this.confidence, {
+    this.bounds = Rect.zero,
+    this.background = 0xff202830,
+  });
   final String text;
   final double confidence;
+
+  /// Physical pixels relative to the captured region.
+  final Rect bounds;
+  final int background;
 }
 
 abstract interface class OcrPlatform {
@@ -68,6 +77,8 @@ class OcrController extends CaptionSource {
   bool loading = false;
   String? error;
   List<OcrLine> lines = [];
+  List<OcrLine> spatialLines = [];
+  int imageWidth = 0, imageHeight = 0;
   int durationMs = 0;
   int recognized = 0;
   int skipped = 0;
@@ -97,6 +108,8 @@ class OcrController extends CaptionSource {
       _wasRunning = capture.running;
       _stabilizer.reset();
       lines = [];
+      spatialLines = [];
+      imageWidth = imageHeight = 0;
       error = null;
       recognized = 0;
       skipped = 0;
@@ -117,6 +130,7 @@ class OcrController extends CaptionSource {
     error = null;
     _stabilizer.reset();
     lines = [];
+    spatialLines = [];
     _notify();
     try {
       await platform.load(models.directory);
@@ -144,9 +158,19 @@ class OcrController extends CaptionSource {
           return OcrLine(
             map['text']! as String,
             (map['confidence']! as num).toDouble(),
+            bounds: Rect.fromLTWH(
+              (map['x'] as num? ?? 0).toDouble(),
+              (map['y'] as num? ?? 0).toDouble(),
+              (map['width'] as num? ?? 0).toDouble(),
+              (map['height'] as num? ?? 0).toDouble(),
+            ),
+            background: map['background'] as int? ?? 0xff202830,
           );
         }).toList();
         if (error == null) {
+          spatialLines = next;
+          imageWidth = state['width'] as int? ?? 0;
+          imageHeight = state['height'] as int? ?? 0;
           _stabilizer.submit(
             next,
             jsonEncode(
@@ -160,6 +184,7 @@ class OcrController extends CaptionSource {
         } else {
           _stabilizer.reset();
           lines = [];
+          spatialLines = [];
         }
         durationMs = state['durationMs'] as int? ?? 0;
         recognized = state['recognized'] as int? ?? 0;
@@ -170,6 +195,7 @@ class OcrController extends CaptionSource {
       if (!_disposed && generation == _generation) {
         _stabilizer.reset();
         lines = [];
+        spatialLines = [];
         error = exception.message ?? '文字识别不可用，请重试';
         loading = false;
         _notify();
@@ -178,6 +204,7 @@ class OcrController extends CaptionSource {
       if (!_disposed && generation == _generation) {
         _stabilizer.reset();
         lines = [];
+        spatialLines = [];
         error = '无法读取识别结果，请重试';
         loading = false;
         _notify();

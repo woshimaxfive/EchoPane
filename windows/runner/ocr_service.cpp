@@ -28,6 +28,10 @@ struct OcrService::Impl {
   uint64_t recognized = 0;
   uint64_t skipped = 0;
   int duration = 0;
+  int width = 0, height = 0;
+#ifndef NDEBUG
+  int detected_boxes = 0, accepted_boxes = 0;
+#endif
   EncodableList lines;
   std::shared_ptr<const CapturePixels> pending;
   std::thread worker;
@@ -108,14 +112,31 @@ struct OcrService::Impl {
           return a.y != b.y ? a.y < b.y : a.x < b.x;
         });
         EncodableList output;
-        for (const auto& line : ordered) output.emplace_back(EncodableMap{
+        for (const auto& line : ordered) {
+          const auto box = cv::Rect(line.x, line.y, line.width, line.height) & cv::Rect(0, 0, bgr.cols, bgr.rows);
+          if (box.empty()) continue;
+          const auto surrounding = cv::Rect(box.x - 4, box.y - 4, box.width + 8, box.height + 8)
+              & cv::Rect(0, 0, bgr.cols, bgr.rows);
+          cv::Mat mask(surrounding.size(), CV_8UC1, cv::Scalar(255));
+          cv::rectangle(mask, cv::Rect(box.x - surrounding.x, box.y - surrounding.y, box.width, box.height), cv::Scalar(0), -1);
+          const auto color = cv::countNonZero(mask) ? cv::mean(bgr(surrounding), mask) : cv::mean(bgr(box));
+          const int64_t background = 0xff000000LL | (static_cast<int64_t>(color[2]) << 16)
+              | (static_cast<int64_t>(color[1]) << 8) | static_cast<int64_t>(color[0]);
+          output.emplace_back(EncodableMap{
           {EncodableValue("text"), EncodableValue(line.text)},
           {EncodableValue("confidence"), EncodableValue(static_cast<double>(line.confidence))},
           {EncodableValue("x"), EncodableValue(line.x)}, {EncodableValue("y"), EncodableValue(line.y)},
-          {EncodableValue("width"), EncodableValue(line.width)}, {EncodableValue("height"), EncodableValue(line.height)}});
+          {EncodableValue("width"), EncodableValue(line.width)}, {EncodableValue("height"), EncodableValue(line.height)},
+          {EncodableValue("background"), EncodableValue(background)}});
+        }
         lock.lock();
         if (token == generation) {
+#ifndef NDEBUG
+          detected_boxes = static_cast<int>(result.textBlocks.size());
+          accepted_boxes = static_cast<int>(ordered.size());
+#endif
           lines = std::move(output);
+          width = pixels->width; height = pixels->height;
           hash = image_hash;
           ++revision;
           ++recognized;
@@ -144,6 +165,7 @@ void OcrService::Load(const std::string& directory) {
   impl_->pending.reset();
   impl_->hash = 0;
   impl_->lines.clear();
+  impl_->width = impl_->height = 0;
   impl_->error.clear();
   impl_->changed.notify_one();
 }
@@ -164,6 +186,7 @@ void OcrService::Reset() {
   impl_->recognized = 0;
   impl_->skipped = 0;
   impl_->duration = 0;
+  impl_->width = impl_->height = 0;
 }
 EncodableMap OcrService::Snapshot() {
   std::lock_guard lock(impl_->mutex);
@@ -174,6 +197,12 @@ EncodableMap OcrService::Snapshot() {
           {EncodableValue("recognized"), EncodableValue(static_cast<int64_t>(impl_->recognized))},
           {EncodableValue("skipped"), EncodableValue(static_cast<int64_t>(impl_->skipped))},
           {EncodableValue("durationMs"), EncodableValue(impl_->duration)},
+          {EncodableValue("width"), EncodableValue(impl_->width)},
+          {EncodableValue("height"), EncodableValue(impl_->height)},
+#ifndef NDEBUG
+          {EncodableValue("detectedBoxes"), EncodableValue(impl_->detected_boxes)},
+          {EncodableValue("acceptedBoxes"), EncodableValue(impl_->accepted_boxes)},
+#endif
           {EncodableValue("error"), impl_->error.empty() ? EncodableValue() : EncodableValue(impl_->error)},
           {EncodableValue("lines"), EncodableValue(impl_->lines)}};
 }

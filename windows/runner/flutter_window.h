@@ -35,6 +35,7 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<ScreenCapture> screen_capture_;
   std::unique_ptr<CredentialStore> credential_store_;
   std::unique_ptr<SubtitleOverlay> subtitle_overlay_;
+  std::unique_ptr<SubtitleOverlay> screen_overlay_;
   std::unique_ptr<AudioService> audio_service_;
 };
 

@@ -29,6 +29,7 @@ bool FlutterWindow::OnCreate() {
   screen_capture_ = std::make_unique<ScreenCapture>(flutter_controller_->engine(), GetHandle());
   credential_store_ = std::make_unique<CredentialStore>(flutter_controller_->engine());
   subtitle_overlay_ = std::make_unique<SubtitleOverlay>(flutter_controller_->engine(), GetHandle());
+  screen_overlay_ = std::make_unique<SubtitleOverlay>(flutter_controller_->engine(), GetHandle(), true);
   audio_service_ = std::make_unique<AudioService>(flutter_controller_->engine());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -46,6 +47,7 @@ bool FlutterWindow::OnCreate() {
 void FlutterWindow::OnDestroy() {
   audio_service_.reset();
   subtitle_overlay_.reset();
+  screen_overlay_.reset();
   credential_store_.reset();
   screen_capture_.reset();
   if (flutter_controller_) {
