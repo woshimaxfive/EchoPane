@@ -13,6 +13,15 @@ abstract class CaptionSource extends ChangeNotifier {
   String get waitingCaption;
   List<String>? get captionTranslations => null;
   List<ConfirmedCaption>? get captionConfirmed => null;
+
+  /// Recent audio turns, including revisions arriving after a newer turn.
+  List<CaptionTurn>? get captionTurns => null;
+}
+
+class CaptionTurn {
+  const CaptionTurn(this.id, this.original, this.translation, this.isFinal);
+  final String id, original, translation;
+  final bool isFinal;
 }
 
 class ConfirmedCaption {
@@ -57,6 +66,8 @@ class CaptionRouter extends CaptionSource {
   List<String>? get captionTranslations => active.captionTranslations;
   @override
   List<ConfirmedCaption>? get captionConfirmed => active.captionConfirmed;
+  @override
+  List<CaptionTurn>? get captionTurns => active.captionTurns;
   @override
   void dispose() {
     screen.removeListener(_changed);

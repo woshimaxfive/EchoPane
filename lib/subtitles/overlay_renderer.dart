@@ -10,6 +10,18 @@ class SubtitleRow {
   final bool secondary;
 }
 
+TextStyle subtitleTextStyle(OverlaySettings settings, bool secondary) =>
+    TextStyle(
+      fontFamily: 'Segoe UI',
+      fontSize: secondary ? settings.fontSize * 0.72 : settings.fontSize,
+      height: 1.35,
+      color: secondary ? const Color(0xffd4dce3) : Colors.white,
+      fontWeight: secondary ? FontWeight.w400 : FontWeight.w600,
+      shadows: const [
+        Shadow(color: Colors.black, blurRadius: 3, offset: Offset(0, 1)),
+      ],
+    );
+
 List<SubtitleRow> subtitleRows(
   OverlaySettings settings,
   List<String> originals,
@@ -39,6 +51,7 @@ Future<ui.Image> renderSubtitles({
   required List<SubtitleRow> rows,
   required bool locked,
   required String status,
+  bool prewrapped = false,
 }) async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder)..scale(scale);
@@ -112,12 +125,13 @@ Future<ui.Image> renderSubtitles({
     int count = rows.length.clamp(1, capacity);
     // Keep bilingual pairs together when choosing the tail of a long screen.
     if (rows.any((row) => row.secondary) && count > 1 && count.isOdd) count--;
-    final selected = rows.skip(rows.length - count).toList();
+    final selected = prewrapped
+        ? rows
+        : rows.skip(rows.length - count).toList();
     final painters = <TextPainter>[];
     int remaining = capacity;
     for (int i = 0; i < selected.length; i++) {
       final row = selected[i];
-      final font = row.secondary ? settings.fontSize * 0.72 : settings.fontSize;
       final lineBudget = (remaining - (selected.length - i - 1)).clamp(
         1,
         capacity,
@@ -125,21 +139,12 @@ Future<ui.Image> renderSubtitles({
       final painter = TextPainter(
         text: TextSpan(
           text: row.text,
-          style: TextStyle(
-            fontFamily: 'Segoe UI',
-            fontSize: font,
-            height: 1.35,
-            color: row.secondary ? const Color(0xffd4dce3) : Colors.white,
-            fontWeight: row.secondary ? FontWeight.w400 : FontWeight.w600,
-            shadows: const [
-              Shadow(color: Colors.black, blurRadius: 3, offset: Offset(0, 1)),
-            ],
-          ),
+          style: subtitleTextStyle(settings, row.secondary),
         ),
         textDirection: TextDirection.ltr,
         textAlign: TextAlign.center,
-        maxLines: lineBudget,
-        ellipsis: '…',
+        maxLines: prewrapped ? 1 : lineBudget,
+        ellipsis: prewrapped ? null : '…',
       )..layout(maxWidth: w - 40);
       remaining -= painter.computeLineMetrics().length;
       painters.add(painter);

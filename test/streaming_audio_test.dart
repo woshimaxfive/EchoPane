@@ -280,6 +280,9 @@ void main() {
     );
     await settle();
     expect(audio.text, 'Hello');
+    expect(audio.captionTurns.map((t) => t.id), ['1', '2']);
+    expect(audio.captionTurns.first.isFinal, true);
+    expect(audio.captionTurns.first.translation, '部落首领');
     expect(history.length, 1);
     stream.last = const SpeechUpdate(
       id: '2',

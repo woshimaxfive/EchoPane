@@ -85,6 +85,7 @@ class AudioController extends CaptionSource {
   final _speechIds = <String>{};
   String _activeSpeech = '', _target = '';
   final _confirmed = <ConfirmedCaption>[];
+  final _turns = <String, CaptionTurn>{};
   bool provisional = false;
   bool _captureStarted = false;
   bool get isCloud => backend == AudioBackend.cloud;
@@ -113,6 +114,12 @@ class AudioController extends CaptionSource {
   @override
   List<ConfirmedCaption>? get captionConfirmed =>
       isCloud ? List.unmodifiable(_confirmed) : null;
+  @override
+  List<CaptionTurn> get captionTurns => isCloud
+      ? List.unmodifiable(_turns.values)
+      : lines.isEmpty
+      ? []
+      : [CaptionTurn('local:$_nativeRevision', text, '', true)];
   @override
   String get captionSession => '$_generation:$_nativeSession';
   @override
@@ -164,6 +171,7 @@ class AudioController extends CaptionSource {
   void _clearSpeech() {
     _captureStarted = false;
     _confirmed.clear();
+    _turns.clear();
     _speechIds.clear();
     _activeSpeech = '';
     _directTranslations = [];
@@ -172,6 +180,17 @@ class AudioController extends CaptionSource {
 
   void _speech(SpeechUpdate update, int token) {
     if (_disposed || token != _generation) return;
+    if (_turns.containsKey(update.id) || !_speechIds.contains(update.id)) {
+      _turns[update.id] = CaptionTurn(
+        update.id,
+        update.source,
+        update.translation,
+        update.isFinal,
+      );
+    }
+    while (_turns.length > 8) {
+      _turns.remove(_turns.keys.first);
+    }
     if (_speechIds.add(update.id)) _activeSpeech = update.id;
     while (_speechIds.length > 256) {
       _speechIds.remove(_speechIds.first);

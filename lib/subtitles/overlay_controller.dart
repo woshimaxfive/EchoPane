@@ -9,6 +9,7 @@ import '../translation/translation_controller.dart';
 import 'overlay_platform.dart';
 import 'overlay_renderer.dart';
 import 'overlay_settings.dart';
+import 'audio_presentation.dart';
 
 class OverlayController extends ChangeNotifier {
   OverlayController(this.source, this.translation, this.platform, this.store) {
@@ -30,6 +31,14 @@ class OverlayController extends ChangeNotifier {
   bool _queued = false;
   int _generation = 0;
   String _signature = '';
+  final _audioPresentation = AudioSubtitlePresentation();
+  final _clock = Stopwatch()..start();
+  Timer? _readingTimer;
+  String _audioSession = '';
+  List<SubtitleRow> _audioRows = [];
+  List<SubtitleRow> get displayRows => source.captionTurns == null
+      ? subtitleRows(settings, originals, translations)
+      : List.unmodifiable(_audioRows);
   List<String> get originals =>
       source.captionRunning ? source.captionLines : [];
   List<String> get translations =>
@@ -139,9 +148,53 @@ class OverlayController extends ChangeNotifier {
 
   void _changed({bool force = false}) {
     if (_disposed) return;
+    final turns = source.captionTurns;
+    final audioActive =
+        turns != null &&
+        window.visible &&
+        source.captionRunning &&
+        source.captionError == null;
+    final audioSession =
+        '${source.captionSession}:${settings.mode.name}:${translation.enabled}';
+    if (!audioActive || audioSession != _audioSession) {
+      _audioPresentation.reset();
+      _audioRows = [];
+      _audioSession = audioSession;
+    }
+    if (audioActive) {
+      _audioPresentation.update([
+        for (final turn in turns)
+          CaptionTurn(
+            turn.id,
+            turn.original,
+            !translation.enabled
+                ? ''
+                : source.captionTranslations != null
+                ? turn.translation
+                : listEquals(translation.originals, source.captionLines)
+                ? translations.join('\n')
+                : '',
+            turn.isFinal,
+          ),
+      ], _clock.elapsed);
+      final scale = (window.dpi / 96).clamp(0.5, 4);
+      _audioRows = _audioPresentation.layout(
+        width: window.width / scale,
+        height: window.height / scale,
+        settings: settings,
+        locked: window.locked,
+        now: _clock.elapsed,
+      );
+      _readingTimer ??= Timer.periodic(
+        const Duration(milliseconds: 100),
+        (_) => _changed(),
+      );
+    } else {
+      _readingTimer?.cancel();
+      _readingTimer = null;
+    }
     final signature = jsonEncode([
-      originals,
-      translations,
+      displayRows.map((row) => [row.text, row.secondary]).toList(),
       status,
       settings.toJson(),
       window.visible,
@@ -178,9 +231,10 @@ class OverlayController extends ChangeNotifier {
           height: height,
           scale: (window.dpi / 96).clamp(0.5, 4),
           settings: settings,
-          rows: subtitleRows(settings, originals, translations),
+          rows: displayRows,
           locked: window.locked,
           status: status,
+          prewrapped: source.captionTurns != null,
         );
         try {
           final data = await image.toByteData(
@@ -215,6 +269,8 @@ class OverlayController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     ++_generation;
+    _readingTimer?.cancel();
+    _audioPresentation.reset();
     platform.listen(null);
     source.removeListener(_changed);
     translation.removeListener(_changed);
