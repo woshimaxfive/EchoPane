@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../subtitles/caption_source.dart';
 import 'provider.dart';
 import 'settings.dart';
+import 'audio_translation.dart';
 
 enum TranslationPhase { off, waiting, translating, ready, failed }
 
@@ -18,6 +19,7 @@ class TranslationController extends ChangeNotifier {
     this.debounce = const Duration(milliseconds: 350),
   }) {
     source.addListener(_sourceChanged);
+    _speech = AudioTranslationQueue(provider)..addListener(_speechChanged);
   }
   final CaptionSource source;
   final TranslationProvider provider;
@@ -44,6 +46,12 @@ class TranslationController extends ChangeNotifier {
   TranslationRequest? _active;
   TranslationRequest? _test;
   final _cache = <String, List<String>>{};
+  late final AudioTranslationQueue _speech;
+  bool get _localSpeech =>
+      source.captionConfirmed != null && source.captionTranslations == null;
+  AudioTurnTranslation? translatedTurn(String id) =>
+      _localSpeech ? _speech.result(id) : null;
+  String translationForTurn(String id) => translatedTurn(id)?.text ?? '';
   bool get hasKey => _key.isNotEmpty;
   bool get canTranslate =>
       initialized &&
@@ -147,7 +155,12 @@ class TranslationController extends ChangeNotifier {
     phase = enabled ? TranslationPhase.waiting : TranslationPhase.off;
     originals = source.captionRunning ? source.captionLines : [];
     _signature = _fingerprint(originals);
-    if (enabled) _schedule();
+    if (_localSpeech) {
+      _session = '';
+      _sourceChanged();
+    } else if (enabled) {
+      _schedule();
+    }
     _notify();
   }
 
@@ -157,6 +170,21 @@ class TranslationController extends ChangeNotifier {
 
   void _sourceChanged() {
     if (_disposed) return;
+    if (_localSpeech) {
+      final session =
+          '${source.captionSession}:${source.captionRunning}:${source.captionError}';
+      if (session != _session) {
+        _invalidate();
+        _cache.clear();
+        _session = session;
+      }
+      originals = source.captionRunning ? source.captionLines : [];
+      if (enabled && source.captionRunning && source.captionError == null) {
+        _speech.update(source.captionTurns ?? [], settings, _key);
+      }
+      _speechChanged();
+      return;
+    }
     final next = source.captionRunning ? source.captionLines : <String>[];
     final signature = _fingerprint(next);
     final session =
@@ -184,6 +212,7 @@ class TranslationController extends ChangeNotifier {
     _timer = null;
     _queued = false;
     _active?.cancel();
+    _speech.reset();
     translations = [];
     durationMs = 0;
     error = null;
@@ -259,6 +288,11 @@ class TranslationController extends ChangeNotifier {
   }
 
   void retry() {
+    if (_localSpeech) {
+      if (enabled) _speech.retry();
+      _speechChanged();
+      return;
+    }
     if (!_eligible) return;
     _invalidate();
     _cache.remove(_signature);
@@ -271,10 +305,30 @@ class TranslationController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  void _speechChanged() {
+    if (_disposed || !_localSpeech) return;
+    final turns = source.captionTurns ?? [];
+    translations = !enabled || originals.isEmpty || turns.isEmpty
+        ? []
+        : [translationForTurn(turns.last.id)];
+    error = _speech.error;
+    phase = !enabled
+        ? TranslationPhase.off
+        : error != null
+        ? TranslationPhase.failed
+        : _speech.busy
+        ? TranslationPhase.translating
+        : translations.any((s) => s.isNotEmpty)
+        ? TranslationPhase.ready
+        : TranslationPhase.waiting;
+    _notify();
+  }
+
   @override
   void dispose() {
     _disposed = true;
     _invalidate();
+    _speech.dispose();
     cancelTest();
     _key = '';
     _cache.clear();

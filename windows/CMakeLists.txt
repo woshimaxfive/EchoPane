@@ -57,6 +57,10 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# OCR and streaming ASR share the pinned ONNX Runtime installed by the runner.
+# Do not let sherpa's older bundled DLL overwrite that runtime during install.
+list(FILTER PLUGIN_BUNDLED_LIBRARIES EXCLUDE REGEX "sherpa_onnx_windows.*[/\\\\](onnxruntime|sherpa-onnx-c-api)\\.dll$")
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can
@@ -73,6 +77,7 @@ set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 install(FILES ${OCR_RUNTIME_LIBRARIES} DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
 install(FILES ${AUDIO_RUNTIME_LIBRARIES} DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+install(FILES ${STREAMING_RUNTIME_LIBRARIES} DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
 install(FILES "${CMAKE_SOURCE_DIR}/../LICENSE" "${CMAKE_SOURCE_DIR}/../THIRD_PARTY_NOTICES.md"
   "${CMAKE_SOURCE_DIR}/../MODEL_NOTICES.md"
   DESTINATION "${CMAKE_INSTALL_PREFIX}/licenses" COMPONENT Runtime)

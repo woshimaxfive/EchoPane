@@ -13,6 +13,7 @@ dependencies:
   tray_manager: 0.5.3
   crypto: ^3.0.7
   file_selector: 1.1.0
+  sherpa_onnx: 1.13.8
 
 dev_dependencies:
   flutter_test:

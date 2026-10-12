@@ -59,6 +59,10 @@ class AudioPanel extends StatelessWidget {
                       child: Text('本地语音识别'),
                     ),
                     DropdownMenuItem(
+                      value: AudioBackend.localStreaming,
+                      child: Text('本地实时识别 · 英语'),
+                    ),
+                    DropdownMenuItem(
                       value: AudioBackend.cloud,
                       child: Text('百炼实时翻译 · 云端'),
                     ),
@@ -144,7 +148,7 @@ class AudioPanel extends StatelessWidget {
                     DropdownMenuItem(value: 'en', child: Text('英语')),
                     DropdownMenuItem(value: 'ja', child: Text('日语')),
                   ],
-                  onChanged: controller.busy
+                  onChanged: controller.busy || controller.isLocalStreaming
                       ? null
                       : (value) {
                           if (value != null) controller.selectLanguage(value);
@@ -186,7 +190,9 @@ class AudioPanel extends StatelessWidget {
                       models.phase == ModelPhase.failed))
                 TextButton(
                   onPressed: models.download,
-                  child: const Text('下载模型 · 148.8 MB'),
+                  child: Text(
+                    '下载模型 · ${(models.total / 1000000).toStringAsFixed(1)} MB',
+                  ),
                 ),
             ],
           ),
@@ -283,6 +289,8 @@ class AudioPanel extends StatelessWidget {
                 child: Text(
                   controller.dropped > 0
                       ? '识别跟不上播放速度，已跳过部分音频'
+                      : controller.isLocalStreaming
+                      ? '英语连续识别 · 临时文字会修正 · 不保存音频'
                       : controller.isCloud
                       ? '自动识别语言${controller.detectedLanguage.isEmpty ? '' : '：${controller.detectedLanguage}'} · 不保存音频'
                       : controller.durationMs > 0

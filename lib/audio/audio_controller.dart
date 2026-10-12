@@ -6,8 +6,9 @@ import 'package:flutter/services.dart';
 import '../ocr/model_store.dart';
 import '../subtitles/caption_source.dart';
 import 'streaming_audio.dart';
+import 'local_audio.dart';
 
-enum AudioBackend { local, cloud }
+enum AudioBackend { local, localStreaming, cloud }
 
 abstract interface class StreamingAudioPlatform {
   Future<void> startStream(String device);
@@ -65,7 +66,7 @@ class WindowsAudioPlatform implements AudioPlatform, StreamingAudioPlatform {
 
 class AudioController extends CaptionSource {
   AudioController(this.platform, {OcrModelStore? models})
-    : models =
+    : _localModels =
           models ??
           OcrModelStore(
             directory:
@@ -73,12 +74,19 @@ class AudioController extends CaptionSource {
             files: audioModelFiles,
           );
   final AudioPlatform platform;
-  final OcrModelStore models;
+  final OcrModelStore _localModels;
+  final streamingModels = OcrModelStore(
+    directory:
+        '${Platform.environment['LOCALAPPDATA']}/EchoPane/models/zipformer-en',
+    files: streamingModelFiles,
+  );
+  OcrModelStore get models => isLocalStreaming ? streamingModels : _localModels;
   List<PlaybackDevice> devices = [];
   String deviceId = '';
   String language = 'auto';
   AudioBackend backend = AudioBackend.local;
   Future<AudioStreamSession> Function()? openStream;
+  Future<AudioStreamSession> Function()? openLocalStream;
   String Function()? streamTarget;
   AudioStreamSession? _stream;
   StreamSubscription<SpeechUpdate>? _speechSubscription;
@@ -89,6 +97,8 @@ class AudioController extends CaptionSource {
   bool provisional = false;
   bool _captureStarted = false;
   bool get isCloud => backend == AudioBackend.cloud;
+  bool get isLocalStreaming => backend == AudioBackend.localStreaming;
+  bool get isStreaming => isCloud || isLocalStreaming;
   String detectedLanguage = '';
   List<String> lines = [];
   bool running = false, starting = false, stopping = false, recognizing = false;
@@ -113,9 +123,9 @@ class AudioController extends CaptionSource {
   List<String> _directTranslations = [];
   @override
   List<ConfirmedCaption>? get captionConfirmed =>
-      isCloud ? List.unmodifiable(_confirmed) : null;
+      isStreaming ? List.unmodifiable(_confirmed) : null;
   @override
-  List<CaptionTurn> get captionTurns => isCloud
+  List<CaptionTurn> get captionTurns => isStreaming
       ? List.unmodifiable(_turns.values)
       : lines.isEmpty
       ? []
@@ -133,6 +143,7 @@ class AudioController extends CaptionSource {
     await refresh();
     _timer ??= Timer.periodic(const Duration(milliseconds: 100), (_) => poll());
     await models.check();
+    if (!identical(models, streamingModels)) await streamingModels.check();
   }
 
   Future<void> refresh() async {
@@ -156,6 +167,7 @@ class AudioController extends CaptionSource {
     if (!{'auto', 'en', 'ja'}.contains(value) || value == language || busy) {
       return;
     }
+    if (isLocalStreaming && value != 'en') return;
     await stop();
     language = value;
     _notify();
@@ -165,6 +177,7 @@ class AudioController extends CaptionSource {
     if (_disposed || busy || backend == value) return;
     await stop();
     backend = value;
+    if (isLocalStreaming) language = 'en';
     _notify();
   }
 
@@ -233,7 +246,7 @@ class AudioController extends CaptionSource {
   }
 
   Future<void> _startStream(int token) async {
-    final factory = openStream;
+    final factory = isCloud ? openStream : openLocalStream;
     if (factory == null || platform is! StreamingAudioPlatform) {
       throw const AudioStreamFailure('当前平台尚不支持实时语音');
     }
@@ -248,7 +261,7 @@ class AudioController extends CaptionSource {
       (update) => _speech(update, token),
       onError: (Object failure) => unawaited(_streamFailed(failure, token)),
     );
-    await session.ready;
+    await session.ready.timeout(const Duration(seconds: 30));
     if (_disposed || token != _generation) {
       await session.cancel();
       return;
@@ -273,7 +286,7 @@ class AudioController extends CaptionSource {
     detectedLanguage = '';
     _clearSpeech();
     _notify();
-    final request = isCloud
+    final request = isStreaming
         ? _startStream(token)
         : platform.start(models.directory, deviceId, language);
     _pendingStart = request;
@@ -300,7 +313,7 @@ class AudioController extends CaptionSource {
 
   Future<void> stop() async {
     if (_disposed || stopping) return;
-    if (isCloud && running && !starting) {
+    if (isStreaming && running && !starting) {
       stopping = true;
       _notify();
       try {
@@ -385,10 +398,10 @@ class AudioController extends CaptionSource {
             ),
       ];
       if (_wanted) {
-        if (isCloud && !_captureStarted) return;
+        if (isStreaming && !_captureStarted) return;
         final nativeError = state['error'] as String? ?? '';
         if (nativeError.isNotEmpty) {
-          if (isCloud) {
+          if (isStreaming) {
             unawaited(
               _streamFailed(
                 const AudioStreamFailure('系统音频设备暂不可用，请检查后重新开始'),
@@ -404,7 +417,7 @@ class AudioController extends CaptionSource {
         } else {
           final nextSession = (state['session'] as num?)?.toInt() ?? 0;
           final nextDrops = (state['dropped'] as num?)?.toInt() ?? 0;
-          if (isCloud &&
+          if (isStreaming &&
               running &&
               (nextSession != _nativeSession || nextDrops > 0)) {
             unawaited(
@@ -416,22 +429,24 @@ class AudioController extends CaptionSource {
             return;
           }
           _nativeSession = (state['session'] as num?)?.toInt() ?? 0;
-          if (!isCloud) {
+          if (!isStreaming) {
             _nativeRevision = (state['revision'] as num?)?.toInt() ?? 0;
           }
           starting = state['loading'] == true;
           running = state['running'] == true;
           recognizing = state['recognizing'] == true;
-          if (!isCloud) {
+          if (!isStreaming) {
             lines = List<String>.from(state['lines'] as List? ?? []);
           }
           level = ((state['level'] as num?)?.toDouble() ?? 0).clamp(0, 1);
           samples = (state['samples'] as num?)?.toInt() ?? 0;
           dropped = (state['dropped'] as num?)?.toInt() ?? 0;
           durationMs = (state['durationMs'] as num?)?.toInt() ?? 0;
-          if (!isCloud) detectedLanguage = state['language'] as String? ?? '';
+          if (!isStreaming) {
+            detectedLanguage = state['language'] as String? ?? '';
+          }
           final pcm = state['pcm'];
-          if (isCloud && pcm is Uint8List && pcm.isNotEmpty) {
+          if (isStreaming && pcm is Uint8List && pcm.isNotEmpty) {
             _stream?.addPcm(pcm);
           }
         }
@@ -439,7 +454,7 @@ class AudioController extends CaptionSource {
       _notify();
     } catch (_) {
       if (token == _generation && !_disposed) {
-        if (isCloud) {
+        if (isStreaming) {
           unawaited(
             _streamFailed(const AudioStreamFailure('系统音频或实时发送失败，请重新开始'), token),
           );

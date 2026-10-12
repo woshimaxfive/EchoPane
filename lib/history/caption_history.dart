@@ -75,6 +75,7 @@ class CaptionHistory extends ChangeNotifier {
   int? _activeId;
   String? _signature;
   final _confirmedSeen = <String>{};
+  final _confirmedEntries = <String, int>{};
   List<CaptionEntry> get entries => List.unmodifiable(_entries);
   int get length => _entries.length;
   int get characters => _characters;
@@ -89,21 +90,50 @@ class CaptionHistory extends ChangeNotifier {
       var changed = false;
       for (final caption in confirmed) {
         final signature = '${source.captionSession}:${caption.id}';
-        if (!_confirmedSeen.add(signature)) continue;
+        final result = translation.translatedTurn(caption.id);
+        if (!_confirmedSeen.add(signature)) {
+          if (result?.isFinal == true) {
+            final index = _entries.indexWhere(
+              (e) => e.id == _confirmedEntries[signature],
+            );
+            if (index >= 0 &&
+                !listEquals(_entries[index].translations, [result!.text])) {
+              final old = _entries[index];
+              final next = old.translated([
+                result.text,
+              ], translation.settings.target);
+              _entries[index] = next;
+              _characters += next.characters - old.characters;
+              changed = true;
+            }
+          }
+          continue;
+        }
         final entry = CaptionEntry(
           id: ++_nextId,
           receivedAt: _now(),
           origin: _origin(),
           originals: [caption.original],
-          translations: [caption.translation],
-          target: caption.target,
+          translations: result?.isFinal == true
+              ? [result!.text]
+              : caption.translation.isEmpty
+              ? []
+              : [caption.translation],
+          target: result?.isFinal == true
+              ? translation.settings.target
+              : caption.translation.isEmpty
+              ? null
+              : caption.target,
         );
         _entries.add(entry);
+        _confirmedEntries[signature] = entry.id;
         _characters += entry.characters;
         changed = true;
       }
       while (_confirmedSeen.length > maxEntries + 256) {
-        _confirmedSeen.remove(_confirmedSeen.first);
+        final id = _confirmedSeen.first;
+        _confirmedSeen.remove(id);
+        _confirmedEntries.remove(id);
       }
       _trim();
       if (changed) notifyListeners();

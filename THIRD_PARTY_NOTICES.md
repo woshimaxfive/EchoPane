@@ -2661,3 +2661,30 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
+
+## Local streaming speech recognition
+
+The Windows runtime uses sherpa-onnx v1.13.8 source at `11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf`, compiled without TTS and speaker diarization. The complete plugin runtime is excluded from the Windows bundle. ONNX Runtime 1.30.0 is shared with OCR.
+
+Source: https://github.com/k2-fsa/sherpa-onnx/tree/v1.13.8
+
+- ffi-2.2.0: package license in `third_party/licenses/ffi-2.2.0-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx-1.13.8: package license in `third_party/licenses/sherpa_onnx-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx_windows-1.13.8: package license in `third_party/licenses/sherpa_onnx_windows-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx_android_arm64-1.13.8: package license in `third_party/licenses/sherpa_onnx_android_arm64-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx_android_armeabi-1.13.8: package license in `third_party/licenses/sherpa_onnx_android_armeabi-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx_android_x86-1.13.8: package license in `third_party/licenses/sherpa_onnx_android_x86-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx_android_x86_64-1.13.8: package license in `third_party/licenses/sherpa_onnx_android_x86_64-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx_ios-1.13.8: package license in `third_party/licenses/sherpa_onnx_ios-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx_macos-1.13.8: package license in `third_party/licenses/sherpa_onnx_macos-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx_linux-1.13.8: package license in `third_party/licenses/sherpa_onnx_linux-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa_onnx_web-1.13.8: package license in `third_party/licenses/sherpa_onnx_web-1.13.8-LICENSE.txt`. Non-Windows native packages are not bundled into the Windows application.
+- sherpa-onnx-1.13.8: `third_party/licenses/sherpa-onnx-1.13.8-LICENSE.txt`.
+- kaldi-native-fbank-1.22.3: `third_party/licenses/kaldi-native-fbank-1.22.3-LICENSE.txt`.
+- kaldi-decoder-0.3.0: `third_party/licenses/kaldi-decoder-0.3.0-LICENSE.txt`.
+- kaldifst-1.8.0: `third_party/licenses/kaldifst-1.8.0-LICENSE.txt`.
+- openfst-1.8.5-2026-04-10: `third_party/licenses/openfst-1.8.5-2026-04-10-LICENSE.txt`.
+- kissfft-febd4ca: `third_party/licenses/kissfft-febd4ca-LICENSE.txt`.
+- simple-sentencepiece-0.7: `third_party/licenses/simple-sentencepiece-0.7-LICENSE.txt`.
+- nlohmann-json-3.12.0: `third_party/licenses/nlohmann-json-3.12.0-LICENSE.txt`.
+- Eigen 3.4.0: primarily MPL-2.0, with notices in `third_party/licenses/eigen-3.4.0-COPYING.*.txt`. Unmodified source: https://gitlab.com/libeigen/eigen/-/tree/3.4.0.

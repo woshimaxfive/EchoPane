@@ -18,6 +18,17 @@ Total: 21,524,894 bytes. The dictionary must match the recognizer; mixing model 
 
 ## Speech recognition
 
+The optional **本地实时识别 · 英语** mode uses the streaming Zipformer transducer through sherpa-onnx 1.13.8. Its English weights are Apache-2.0 according to the upstream [model card](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/tree/672fbf1b30579d6585301139bb363f42a0ad4a24). Downloads are user-triggered, pinned to this revision, and checked for exact size and SHA-256. A verified cache in `%LOCALAPPDATA%/EchoPane/models/zipformer-en/` works offline. Audio remains on the device; only text is sent when translation is enabled.
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx | 71,083,163 | 563fde436d16cf7607cf408cd6b30909819d03162652ef389c2450ced3f45ac1 |
+| decoder-epoch-99-avg-1-chunk-16-left-128.onnx | 2,092,621 | 7bf787f90b194b307e5a4ad6a34fadb4e748304c35f78a8d66358a05b13ee6ef |
+| joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx | 259,335 | d944208d660d67c8d72cd2acaeac971fa5ceb8c80e76c1968148846fedd6e297 |
+| tokens.txt | 5,048 | 49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb |
+
+Total: 73,440,167 bytes. This model does not automatically identify other languages. Temporary hypotheses may change; noise and overlapping speech can produce errors. The Windows runtime is built from pinned sherpa-onnx source with TTS and its phonemizer dependencies disabled, sharing the existing ONNX Runtime 1.30.0 with OCR.
+
 Audio mode uses multilingual **OpenAI Whisper base** for transcription and **Silero VAD v6.2.0** for speech detection. Both model projects use MIT licenses. Code and model notices are included in `third_party/licenses/`. Whisper's internal translation task is disabled; target-language translation uses the separately configured text service.
 
 The user-triggered download contacts Hugging Face and its download hosts. Audio is not included in download requests. Models are stored in `%LOCALAPPDATA%/EchoPane/models/whisper-base/`. A verified cache works offline. Downloads are checked for exact size and SHA-256 before use.

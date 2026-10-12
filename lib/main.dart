@@ -22,6 +22,7 @@ import 'audio/audio_controller.dart';
 import 'audio/audio_panel.dart';
 import 'audio/bailian_audio.dart';
 import 'audio/streaming_audio.dart';
+import 'audio/local_audio.dart';
 import 'history/caption_history.dart';
 import 'history/history_dialog.dart';
 import 'screen_translation/screen_controller.dart';
@@ -86,6 +87,7 @@ Future<void> startApplication({
     credentials ?? const WindowsCredentialStore(),
   );
   audio.streamTarget = () => translation.settings.target;
+  audio.openLocalStream = () async => LocalAudioSession(audio.models.directory);
   audio.openStream =
       audioStreamFactory ??
       () async {

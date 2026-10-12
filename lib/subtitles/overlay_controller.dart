@@ -171,10 +171,17 @@ class OverlayController extends ChangeNotifier {
                 ? ''
                 : source.captionTranslations != null
                 ? turn.translation
+                : source.captionConfirmed != null
+                ? translation.translationForTurn(turn.id)
                 : listEquals(translation.originals, source.captionLines)
                 ? translations.join('\n')
                 : '',
-            turn.isFinal,
+            turn.isFinal &&
+                (!translation.enabled ||
+                    source.captionTranslations != null ||
+                    source.captionConfirmed == null ||
+                    translation.translatedTurn(turn.id)?.isFinal == true ||
+                    translation.error != null),
           ),
       ], _clock.elapsed);
       final scale = (window.dpi / 96).clamp(0.5, 4);
