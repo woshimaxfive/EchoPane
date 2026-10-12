@@ -227,8 +227,14 @@ void main() {
         await capture.chooseDisplay(capture.displays.first);
         capture.region = CaptureRegion.fromMap(crop);
         await waitFor(() async => ocr.ready);
-        await capture.start();
-        translation.setEnabled(true);
+        expect(find.byKey(const Key('overlay-settings')), findsNothing);
+        expect(find.byKey(const Key('ocr-text')), findsNothing);
+        await window.overlay!.show(true, restore: true);
+        expect(window.overlay!.window.visible, isFalse);
+        await tester.tap(find.byKey(const Key('capture-toggle')));
+        await tester.pump();
+        expect(overlay.enabled, isTrue);
+        expect(translation.enabled, isTrue);
         await waitFor(() async => translation.translations.length == 2);
         expect(ocr.imageWidth, 1000);
         expect(ocr.imageHeight, 400);
@@ -240,11 +246,12 @@ void main() {
         );
         await tester.tap(find.byKey(const Key('screen-overlay-settings')));
         await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const Key('screen-overlay-visible')));
-        await tester.pumpAndSettle();
+
         await tester.tap(find.byKey(const Key('screen-overlay-save')));
         await tester.pumpAndSettle();
         await waitFor(() async => ((await state())['frames'] as int) > 0);
+        expect(find.text('我们得在日出前离开。'), findsNothing);
+        expect(window.overlay!.displayRows, isEmpty);
         final below = await state();
         expect(below['visible'], isTrue);
         expect(below['width'], 1000);

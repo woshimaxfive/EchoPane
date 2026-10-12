@@ -15,7 +15,7 @@ import 'package:window_manager/window_manager.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
-    'screen OCR to bilingual captions, settings and Windows credentials',
+    'in-place translation pipeline, settings and Windows credentials',
     (tester) async {
       const manifestPath = String.fromEnvironment('ECHO_OCR_FIXTURES');
       const artifacts = String.fromEnvironment('ECHO_TEST_ARTIFACTS');
@@ -195,9 +195,7 @@ void main() {
         await capture.chooseDisplay(capture.displays.first);
         capture.region = CaptureRegion.fromMap(region!);
         final elapsed = Stopwatch()..start();
-        await capture.start();
-        await tester.pump();
-        await tester.tap(find.byKey(const Key('translation-toggle')));
+        await tester.tap(find.byKey(const Key('capture-toggle')));
         for (
           int i = 0;
           i < 120 && translation.phase != TranslationPhase.ready;
@@ -209,9 +207,12 @@ void main() {
         expect(translation.error, isNull);
         expect(translation.translations, ['我们得在日出前离开。', '这条路仍然畅通。']);
         await tester.pump();
-        expect(find.text('我们得在日出前离开。'), findsOneWidget);
+        expect(find.text('我们得在日出前离开。'), findsNothing);
+        expect(find.byKey(const Key('ocr-text')), findsNothing);
+        expect(find.byKey(const Key('overlay-settings')), findsNothing);
+        expect(window.screenOverlay!.enabled, isTrue);
         final firstLatency = elapsed.elapsedMilliseconds;
-        await screenshot('bilingual-window');
+        await screenshot('in-place-window');
         final count = calls;
         await tester.pump(const Duration(milliseconds: 1200));
         expect(

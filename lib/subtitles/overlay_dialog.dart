@@ -37,7 +37,7 @@ class _OverlaySettingsDialogState extends State<OverlaySettingsDialog> {
     builder: (context, _) {
       final controller = widget.controller;
       return AlertDialog(
-        title: const Text('悬浮字幕'),
+        title: const Text('音频字幕'),
         content: SizedBox(
           width: 520,
           child: SingleChildScrollView(
@@ -46,7 +46,7 @@ class _OverlaySettingsDialogState extends State<OverlaySettingsDialog> {
               children: [
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('显示字幕窗口'),
+                  title: const Text('显示音频字幕窗口'),
                   subtitle: const Text('置顶显示，主窗口最小化后继续运行'),
                   value: controller.window.visible,
                   key: const Key('overlay-visible'),
@@ -87,7 +87,7 @@ class _OverlaySettingsDialogState extends State<OverlaySettingsDialog> {
                   contentPadding: EdgeInsets.zero,
                   key: const Key('overlay-allow-capture'),
                   title: const Text('允许远程桌面和录屏显示字幕'),
-                  subtitle: const Text('保存后生效。开启时请将字幕移出屏幕识别区域，避免重复识别。'),
+                  subtitle: const Text('保存后生效，仅控制音频字幕在远程桌面和录屏中的可见性。'),
                   value: _settings.allowCapture,
                   onChanged: _saving || controller.busy
                       ? null
@@ -127,7 +127,7 @@ class _OverlaySettingsDialogState extends State<OverlaySettingsDialog> {
                       _settings = _settings.copyWith(maxLines: value.round()),
                 ),
                 const Text(
-                  '超出窗口或行数时保留末尾内容；双语优先成对显示。',
+                  '长段按窗口宽度换行、滚动；完整译文保留阅读时间。',
                   style: TextStyle(fontSize: 12, color: Color(0xff708196)),
                 ),
                 const SizedBox(height: 10),

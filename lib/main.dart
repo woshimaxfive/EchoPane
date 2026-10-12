@@ -8,7 +8,7 @@ import 'capture/capture_controller.dart';
 import 'capture/capture_platform.dart';
 import 'ocr/model_store.dart';
 import 'ocr/ocr_controller.dart';
-import 'ocr/ocr_panel.dart';
+import 'screen_translation/screen_panel.dart';
 import 'translation/provider.dart';
 import 'translation/settings.dart';
 import 'translation/settings_dialog.dart';
@@ -52,9 +52,9 @@ Future<void> startApplication({
       items: [
         MenuItem(key: 'show', label: '显示窗口'),
         MenuItem(key: 'stop', label: '停止捕获'),
-        MenuItem(key: 'subtitles', label: '显示悬浮字幕'),
+        MenuItem(key: 'subtitles', label: '显示音频字幕'),
         MenuItem(key: 'subtitle_restore', label: '恢复字幕操作'),
-        MenuItem(key: 'subtitle_hide', label: '隐藏悬浮字幕'),
+        MenuItem(key: 'subtitle_hide', label: '隐藏音频字幕'),
         MenuItem(key: 'screen_hide', label: '隐藏原位译文'),
         MenuItem.separator(),
         MenuItem(key: 'quit', label: '退出'),
@@ -308,6 +308,9 @@ class _CaptureWindowState extends State<CaptureWindow>
               widget.controller,
               widget.audio,
               widget.captions,
+              widget.ocr,
+              widget.translation,
+              widget.screenOverlay,
             ]),
             builder: (context, _) => _content(context, widget.controller),
           ),
@@ -393,7 +396,7 @@ class _CaptureWindowState extends State<CaptureWindow>
                     Expanded(
                       child: widget.captions == null
                           ? const Text(
-                              '屏幕翻译',
+                              '原位翻译',
                               style: TextStyle(
                                 fontSize: 22,
                                 fontWeight: FontWeight.w600,
@@ -407,11 +410,11 @@ class _CaptureWindowState extends State<CaptureWindow>
                               items: const [
                                 DropdownMenuItem(
                                   value: RecognitionMode.screen,
-                                  child: Text('屏幕翻译'),
+                                  child: Text('原位翻译'),
                                 ),
                                 DropdownMenuItem(
                                   value: RecognitionMode.audio,
-                                  child: Text('音频字幕'),
+                                  child: Text('音频翻译'),
                                 ),
                               ],
                               onChanged: state.busy || widget.audio!.busy
@@ -421,6 +424,8 @@ class _CaptureWindowState extends State<CaptureWindow>
                                           value == widget.captions!.mode) {
                                         return;
                                       }
+                                      await widget.overlay?.close();
+                                      widget.screenOverlay?.setEnabled(false);
                                       await widget.controller.stop();
                                       await widget.audio!.stop();
                                       widget.captions!.select(value);
@@ -435,7 +440,8 @@ class _CaptureWindowState extends State<CaptureWindow>
                         onPressed: () =>
                             showCaptionHistory(context, widget.history!),
                       ),
-                    if (widget.overlay != null)
+                    if (widget.overlay != null &&
+                        widget.captions?.mode == RecognitionMode.audio)
                       TextButton.icon(
                         key: const Key('overlay-settings'),
                         onPressed: () =>
@@ -444,7 +450,7 @@ class _CaptureWindowState extends State<CaptureWindow>
                           Icons.picture_in_picture_alt,
                           size: 18,
                         ),
-                        label: const Text('悬浮字幕'),
+                        label: const Text('音频字幕'),
                       ),
                     if (widget.translation != null)
                       TextButton.icon(
@@ -484,7 +490,7 @@ class _CaptureWindowState extends State<CaptureWindow>
                   )
                 else ...[
                   const Text(
-                    '选择关注的画面，截图和文字识别都在本机处理。',
+                    '框选文字区域，译文直接显示在原文下方或替换原文。',
                     style: TextStyle(color: Color(0xff708196)),
                   ),
                   const SizedBox(height: 14),
@@ -603,12 +609,10 @@ class _CaptureWindowState extends State<CaptureWindow>
                   const SizedBox(height: 12),
                   if (widget.ocr != null) ...[
                     const Divider(height: 1, color: Color(0xffdae2e7)),
-                    Expanded(
-                      flex: 3,
-                      child: OcrPanel(
-                        controller: widget.ocr!,
-                        translation: widget.translation,
-                      ),
+                    ScreenTranslationPanel(
+                      controller: widget.ocr!,
+                      translation: widget.translation,
+                      overlay: widget.screenOverlay,
                     ),
                     const SizedBox(height: 10),
                   ],
@@ -633,7 +637,7 @@ class _CaptureWindowState extends State<CaptureWindow>
                             widget.screenOverlay!,
                           ),
                           icon: const Icon(Icons.translate, size: 18),
-                          label: const Text('原位翻译'),
+                          label: const Text('显示设置'),
                         ),
                       if (state.snapshot != null)
                         Text(
@@ -646,16 +650,44 @@ class _CaptureWindowState extends State<CaptureWindow>
                       const SizedBox(width: 14),
                       FilledButton.icon(
                         key: const Key('capture-toggle'),
-                        onPressed: state.busy || state.display == null
+                        onPressed:
+                            state.busy ||
+                                (!state.running &&
+                                    (state.display == null ||
+                                        (widget.ocr != null &&
+                                            !widget.ocr!.ready) ||
+                                        widget.screenOverlay?.initialized ==
+                                            false ||
+                                        widget.translation?.initialized ==
+                                            false))
                             ? null
-                            : state.running
-                            ? state.stop
-                            : state.start,
+                            : () async {
+                                if (state.running) {
+                                  widget.screenOverlay?.setEnabled(false);
+                                  await state.stop();
+                                  return;
+                                }
+                                final translation = widget.translation;
+                                if (translation != null &&
+                                    !translation.canTranslate) {
+                                  await showTranslationSettings(
+                                    context,
+                                    translation,
+                                  );
+                                  return;
+                                }
+                                translation?.setEnabled(true);
+                                widget.screenOverlay?.setEnabled(true);
+                                await state.start();
+                                if (!state.running) {
+                                  widget.screenOverlay?.setEnabled(false);
+                                }
+                              },
                         icon: Icon(
                           state.running ? Icons.stop : Icons.play_arrow,
                           size: 19,
                         ),
-                        label: Text(state.running ? '停止' : '开始'),
+                        label: Text(state.running ? '停止原位翻译' : '开始原位翻译'),
                       ),
                     ],
                   ),

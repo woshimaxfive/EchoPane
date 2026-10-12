@@ -191,7 +191,7 @@ class _HistoryDialogState extends State<_HistoryDialog> {
                                 final origin =
                                     entry.origin == RecognitionMode.audio
                                     ? '音频'
-                                    : '屏幕';
+                                    : '原位';
                                 final target =
                                     translationLanguages[entry.target];
                                 return Padding(

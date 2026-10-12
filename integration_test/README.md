@@ -1,14 +1,14 @@
 # Windows integration tests
 
-The independent subtitle suite uses the OCR fixtures with an injected translation fixture and isolated temporary settings. It opens a real layered window, checks presentation, capture exclusion while covering the input, interactive/transparent hit tests, recovery, resizing, minimized-main-window behavior, and minimum-size settings. It also verifies capture visibility with mouse pass-through enabled, persistence of the remote option, and restoration of exclusion. The Debug screenshot method temporarily permits capture of this application's overlay over the owned fixture, with native screen capture stopped, then restores its previous capture policy; it is excluded from Release builds. No production key or translation configuration is changed.
+The independent subtitle suite injects an audio session with fixture text and isolated temporary settings. It opens a real layered window, checks audio presentation, capture exclusion, interactive/transparent hit tests, recovery, minimized-main-window behavior, and minimum-size settings. It verifies that switching to in-place translation stops audio and closes the subtitle window, and that tray restoration cannot open a screen subtitle window. No production key or translation configuration is changed; this suite does not test recognition or cloud translation quality.
 
 ```powershell
-flutter test integration_test/windows_subtitles_test.dart -d windows --dart-define=ECHO_OCR_FIXTURES=C:/ocr-fixtures/manifest.json --dart-define=ECHO_TEST_ARTIFACTS=C:/ocr-fixtures/results
+flutter test integration_test/windows_subtitles_test.dart -d windows
 ```
 
 The tests require a Windows interactive desktop, Flutter's Windows build tools, and the native OCR dependencies described in the project README. Test-only native methods are excluded from Release builds.
 
-The screen translation suite generates owned English/Japanese page fixtures with room for bilingual text and uses injected translations with isolated settings. It checks physical-coordinate window placement, both display modes, click-through input, visible-overlay OCR feedback prevention, capture exclusion, blank-frame clearing, stop and hide-hotkey behavior, and minimum window size. It records overlay screenshots and remote sampling times. It does not measure cloud translation quality, real-video performance, or acceptance in a specific remote-desktop product. Keep the desktop unlocked and the display active during capture tests.
+The in-place translation suite generates owned English/Japanese page fixtures with room for bilingual text and uses injected translations with isolated settings. It checks one-button startup, absence of a separate screen-text panel or screen subtitle window, physical-coordinate window placement, both display modes, click-through input, visible-overlay OCR feedback prevention, capture exclusion, blank-frame clearing, stop and hide-hotkey behavior, and minimum window size. It records overlay screenshots and remote sampling times. It does not measure cloud translation quality, real-video performance, or acceptance in a specific remote-desktop product. Keep the desktop unlocked and the display active during capture tests.
 
 ```powershell
 flutter test integration_test/windows_screen_translation_test.dart -d windows --dart-define=ECHO_TEST_ARTIFACTS=C:/ocr-fixtures/results

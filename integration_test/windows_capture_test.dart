@@ -96,9 +96,13 @@ void main() {
       snapshot = await channel.invokeMapMethod<Object?, Object?>('snapshot');
       expect(snapshot!['topmost'], isFalse);
 
-      await tester.tap(find.byKey(const Key('capture-toggle')));
+      // Capture is internal to in-place translation; test its lifecycle directly.
+      final window = tester.widget<app.CaptureWindow>(
+        find.byType(app.CaptureWindow),
+      );
+      await window.controller.start();
       await tester.pumpAndSettle();
-      expect(find.text('停止'), findsOneWidget);
+      expect(find.text('停止原位翻译'), findsOneWidget);
       await windowManager.minimize();
       await tester.pump(const Duration(milliseconds: 500));
       expect(await windowManager.isVisible(), isFalse);
@@ -109,7 +113,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('capture-toggle')));
       await tester.pumpAndSettle();
-      expect(find.text('开始'), findsOneWidget);
+      expect(find.text('开始原位翻译'), findsOneWidget);
       const artifactDirectory = String.fromEnvironment('ECHO_TEST_ARTIFACTS');
       if (artifactDirectory.isNotEmpty) {
         final directory = Directory(artifactDirectory)

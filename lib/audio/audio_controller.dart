@@ -115,6 +115,8 @@ class AudioController extends CaptionSource {
   @override
   bool get captionRunning => running;
   @override
+  bool get supportsAudioSubtitles => true;
+  @override
   String? get captionError => error;
   @override
   List<String> get captionLines => lines;

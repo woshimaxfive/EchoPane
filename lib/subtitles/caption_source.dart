@@ -14,6 +14,9 @@ abstract class CaptionSource extends ChangeNotifier {
   List<String>? get captionTranslations => null;
   List<ConfirmedCaption>? get captionConfirmed => null;
 
+  /// Only audio sources may use the independent subtitle window.
+  bool get supportsAudioSubtitles => false;
+
   /// Recent audio turns, including revisions arriving after a newer turn.
   List<CaptionTurn>? get captionTurns => null;
 }
@@ -68,6 +71,8 @@ class CaptionRouter extends CaptionSource {
   List<ConfirmedCaption>? get captionConfirmed => active.captionConfirmed;
   @override
   List<CaptionTurn>? get captionTurns => active.captionTurns;
+  @override
+  bool get supportsAudioSubtitles => active.supportsAudioSubtitles;
   @override
   void dispose() {
     screen.removeListener(_changed);

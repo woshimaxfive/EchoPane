@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:echopane/subtitles/caption_stabilizer.dart';
+import 'package:echopane/subtitles/caption_source.dart';
+import 'package:echopane/audio/audio_controller.dart';
 import 'package:echopane/subtitles/overlay_renderer.dart';
 import 'package:echopane/subtitles/overlay_settings.dart';
 import 'package:echopane/subtitles/overlay_controller.dart';
@@ -15,6 +17,7 @@ import 'package:echopane/translation/translation_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'capture_controller_test.dart' show FakePlatform;
+import 'audio_test.dart' show FakeAudio;
 import 'ocr_test.dart' show FakeOcr;
 import 'translation_test.dart'
     show FakeTranslations, MemorySettings, MemoryCredentials;
@@ -55,18 +58,16 @@ void main() {
   testWidgets(
     'failed remote setting save restores capture exclusion and retains mouse pass-through',
     (tester) async {
-      final capture = CaptureController(FakePlatform());
-      final models = OcrModelStore(directory: 'unused');
-      final ocr = OcrController(capture, models, FakeOcr());
+      final audio = AudioController(FakeAudio());
       final translation = TranslationController(
-        ocr,
+        audio,
         FakeTranslations(),
         MemorySettings(),
         MemoryCredentials(),
       );
       final platform = _IdleOverlay();
       final store = _MemoryStyles();
-      final overlay = OverlayController(ocr, translation, platform, store);
+      final overlay = OverlayController(audio, translation, platform, store);
       try {
         await overlay.initialize();
         await overlay.show(true, locked: true);
@@ -85,32 +86,27 @@ void main() {
       } finally {
         overlay.dispose();
         translation.dispose();
-        ocr.dispose();
-        models.dispose();
-        capture.dispose();
+        audio.dispose();
       }
     },
   );
-  test('overlay rejects mismatched translations and clears content when capture stops', () async {
-    final capture = CaptureController(FakePlatform());
-    final models = OcrModelStore(directory: 'unused');
-    final ocr = OcrController(capture, models, FakeOcr());
+  test('overlay rejects mismatched translations and clears content when audio stops', () async {
+    final audio = AudioController(FakeAudio());
     final translation = TranslationController(
-      ocr,
+      audio,
       FakeTranslations(),
       MemorySettings(),
       MemoryCredentials(),
     );
     final overlay = OverlayController(
-      ocr,
+      audio,
       translation,
       _IdleOverlay(),
       _MemoryStyles(),
     );
     try {
-      await capture.initialize();
-      await capture.start();
-      ocr.lines = [const OcrLine('New sentence', 0.95)];
+      audio.running = true;
+      audio.lines = ['New sentence'];
       translation.enabled = true;
       translation.originals = ['Old sentence'];
       translation.translations = ['旧译文'];
@@ -119,15 +115,72 @@ void main() {
       translation.originals = ['New sentence'];
       translation.translations = ['新译文'];
       expect(overlay.translations, ['新译文']);
-      await capture.stop();
+      await audio.stop();
       expect(overlay.originals, isEmpty);
       expect(overlay.translations, isEmpty);
     } finally {
       overlay.dispose();
       translation.dispose();
+      audio.dispose();
+    }
+  });
+  testWidgets('screen text cannot enter audio subtitles through the router', (
+    tester,
+  ) async {
+    final capture = CaptureController(FakePlatform());
+    final models = OcrModelStore(directory: 'unused');
+    final ocr = OcrController(capture, models, FakeOcr());
+    final audio = AudioController(FakeAudio());
+    final router = CaptionRouter(ocr, audio);
+    final translation = TranslationController(
+      router,
+      FakeTranslations(),
+      MemorySettings(),
+      MemoryCredentials(),
+    );
+    final overlay = OverlayController(
+      router,
+      translation,
+      _IdleOverlay(),
+      _MemoryStyles(),
+    );
+    try {
+      await capture.initialize();
+      await capture.start();
+      ocr.lines = [const OcrLine('Screen text must stay in-place', 0.95)];
+      translation.enabled = true;
+      translation.originals = ocr.captionLines;
+      translation.translations = ['屏幕译文'];
+      await overlay.initialize();
+      await overlay.show(true);
+      expect(overlay.window.visible, false);
+      expect(overlay.originals, isEmpty);
+      expect(overlay.translations, isEmpty);
+      expect(overlay.displayRows, isEmpty);
+      router.select(RecognitionMode.audio);
+      audio.running = true;
+      audio.lines = ['Audio only'];
+      await overlay.show(true);
+      expect(overlay.window.visible, true);
+      expect(overlay.originals, ['Audio only']);
+      router.select(RecognitionMode.screen);
+      await tester.pump();
+      expect(overlay.window.visible, false);
+      expect(overlay.displayRows, isEmpty);
+      expect(overlay.originals, isEmpty);
+      await overlay.show(true, restore: true);
+      expect(overlay.window.visible, false);
+    } finally {
+      await overlay.close();
+      await capture.stop();
+      overlay.dispose();
+      translation.dispose();
+      router.dispose();
+      audio.dispose();
       ocr.dispose();
       models.dispose();
       capture.dispose();
+      await tester.pumpAndSettle();
     }
   });
   testWidgets(

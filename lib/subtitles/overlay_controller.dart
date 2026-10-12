@@ -36,19 +36,20 @@ class OverlayController extends ChangeNotifier {
   Timer? _readingTimer;
   String _audioSession = '';
   List<SubtitleRow> _audioRows = [];
-  List<SubtitleRow> get displayRows => source.captionTurns == null
-      ? subtitleRows(settings, originals, translations)
-      : List.unmodifiable(_audioRows);
+  List<SubtitleRow> get displayRows => List.unmodifiable(_audioRows);
   List<String> get originals =>
-      source.captionRunning ? source.captionLines : [];
+      source.supportsAudioSubtitles && source.captionRunning
+      ? source.captionLines
+      : [];
   List<String> get translations =>
-      source.captionRunning &&
+      source.supportsAudioSubtitles &&
+          source.captionRunning &&
           translation.enabled &&
           listEquals(translation.originals, originals)
       ? translation.translations
       : [];
   String get status => !source.captionRunning
-      ? '开始识别后，字幕会显示在这里'
+      ? '开始音频翻译后，字幕会显示在这里'
       : source.captionError != null
       ? '识别暂不可用，请在主窗口检查'
       : settings.mode == SubtitleMode.translated &&
@@ -74,6 +75,7 @@ class OverlayController extends ChangeNotifier {
 
   Future<void> show(bool visible, {bool restore = false, bool? locked}) async {
     if (_disposed || busy) return;
+    visible = visible && source.supportsAudioSubtitles;
     busy = true;
     error = null;
     notifyListeners();
@@ -92,7 +94,10 @@ class OverlayController extends ChangeNotifier {
       if (!_disposed) error = '无法更新悬浮字幕，请重试';
     } finally {
       busy = false;
-      if (!_disposed) notifyListeners();
+      if (!_disposed) {
+        _changed();
+        notifyListeners();
+      }
     }
   }
 
@@ -150,6 +155,7 @@ class OverlayController extends ChangeNotifier {
     if (_disposed) return;
     final turns = source.captionTurns;
     final audioActive =
+        source.supportsAudioSubtitles &&
         turns != null &&
         window.visible &&
         source.captionRunning &&
@@ -200,6 +206,12 @@ class OverlayController extends ChangeNotifier {
       _readingTimer?.cancel();
       _readingTimer = null;
     }
+    if (!source.supportsAudioSubtitles && window.visible) {
+      ++_generation;
+      _queued = false;
+      if (!busy && error == null) unawaited(close());
+      return;
+    }
     final signature = jsonEncode([
       displayRows.map((row) => [row.text, row.secondary]).toList(),
       status,
@@ -241,7 +253,7 @@ class OverlayController extends ChangeNotifier {
           rows: displayRows,
           locked: window.locked,
           status: status,
-          prewrapped: source.captionTurns != null,
+          prewrapped: true,
         );
         try {
           final data = await image.toByteData(

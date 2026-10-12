@@ -28,7 +28,7 @@ class _ScreenOverlayDialogState extends State<_ScreenOverlayDialog> {
     builder: (context, _) {
       final controller = widget.controller;
       return AlertDialog(
-        title: const Text('画面原位翻译'),
+        title: const Text('原位翻译设置'),
         content: SizedBox(
           width: 480,
           child: SingleChildScrollView(
@@ -36,17 +36,6 @@ class _ScreenOverlayDialogState extends State<_ScreenOverlayDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  key: const Key('screen-overlay-visible'),
-                  title: const Text('显示原位译文'),
-                  subtitle: const Text('开启屏幕识别和翻译后，译文跟随对应文字位置'),
-                  value: controller.enabled,
-                  onChanged: controller.initialized
-                      ? controller.setEnabled
-                      : null,
-                ),
-                const SizedBox(height: 12),
                 DropdownButtonFormField<ScreenTranslationMode>(
                   key: const Key('screen-overlay-mode'),
                   initialValue: settings.mode,
