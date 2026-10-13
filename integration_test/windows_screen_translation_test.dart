@@ -77,7 +77,16 @@ void main() {
         const width = 1000, height = 400;
         final recorder = ui.PictureRecorder();
         final canvas = Canvas(recorder);
-        canvas.drawColor(const Color(0xff243344), BlendMode.src);
+        canvas.drawRect(
+          Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+          Paint()
+            ..shader =
+                const LinearGradient(
+                  colors: [Color(0xff243344), Color(0xff4a657b)],
+                ).createShader(
+                  Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+                ),
+        );
         for (int i = 0; i < lines.length; i++) {
           final painter = TextPainter(
             text: TextSpan(
@@ -178,10 +187,18 @@ void main() {
           descriptor.dispose();
           buffer.dispose();
         }
+        final diagnostic = (await screen.invokeMapMethod<Object?, Object?>(
+          'ocrSnapshot',
+        ))!;
+        diagnostic['lines'] = [
+          for (final line in diagnostic['lines'] as List<Object?>? ?? [])
+            Map<Object?, Object?>.of(line! as Map<Object?, Object?>)
+              ..remove('patch'),
+        ];
         fail(
           'Screen translation state did not settle: overlay=${overlay.error}, ocr=${ocr.error}, '
           'capture=${capture.phase}/${capture.error}, ready=${ocr.ready}, text=${ocr.text}, '
-          'translation=${translation.enabled}/${translation.phase}/${translation.error}, native=${await screen.invokeMapMethod<Object?, Object?>("ocrSnapshot")}',
+          'translation=${translation.enabled}/${translation.phase}/${translation.error}, native=$diagnostic',
         );
       }
 
@@ -244,6 +261,33 @@ void main() {
           ),
           isTrue,
         );
+        for (final line in [
+          for (final block in ocr.spatialLines)
+            ...block.sourceLines.isEmpty ? [block] : block.sourceLines,
+        ]) {
+          final patch = line.backgroundPatch!;
+          int bright = 0, lowest = 255, highest = 0;
+          for (int i = 0; i < patch.rgba.length; i += 4) {
+            final red = patch.rgba[i];
+            if (red < lowest) lowest = red;
+            if (red > highest) highest = red;
+            if (red > 220 &&
+                patch.rgba[i + 1] > 220 &&
+                patch.rgba[i + 2] > 220) {
+              bright++;
+            }
+          }
+          expect(
+            bright / (patch.rgba.length / 4),
+            lessThan(0.01),
+            reason: 'Original white glyphs must be removed',
+          );
+          expect(
+            highest - lowest,
+            greaterThan(patch.bounds.width * (0x4a - 0x24) / 1000 * 0.5),
+            reason: 'The repaired background must retain its gradient',
+          );
+        }
         await tester.tap(find.byKey(const Key('screen-overlay-settings')));
         await tester.pumpAndSettle();
 
@@ -286,13 +330,37 @@ void main() {
           calls,
           reason: 'Own translations must not create new translation requests',
         );
+        final captureState = (await screen.invokeMapMethod<Object?, Object?>(
+          'snapshot',
+        ))!;
+        expect(captureState['sessionExclusion'], true);
+        expect(captureState['remoteSamples'], 0);
         expect(
-          (await screen.invokeMapMethod<Object?, Object?>(
-                'snapshot',
-              ))!['remoteSamples']
-              as int,
-          greaterThan(5),
+          captureState['exclusionUpdates'] as int,
+          greaterThan(1),
+          reason: 'The overlay was created after capture started',
         );
+        expect(
+          captureState['frameIteration'] as int,
+          greaterThanOrEqualTo(captureState['exclusionIteration'] as int),
+        );
+        // WGC must still return the original pixels under the visible overlay,
+        // rather than its Chinese translation or a black exclusion rectangle.
+        final clean = (await screen.invokeMapMethod<Object?, Object?>(
+          'debugCapturedFixture',
+        ))!;
+        final expected = await File(english['path'] as String).readAsBytes();
+        final actual = clean['rgba'] as Uint8List;
+        expect(actual.length, expected.length);
+        int matching = 0;
+        for (int i = 0; i < actual.length; i += 4) {
+          if ((actual[i] - expected[i]).abs() <= 2 &&
+              (actual[i + 1] - expected[i + 1]).abs() <= 2 &&
+              (actual[i + 2] - expected[i + 2]).abs() <= 2) {
+            matching++;
+          }
+        }
+        expect(matching / (actual.length / 4), greaterThan(0.98));
         await overlay.save(overlay.settings.copyWith(allowCapture: false));
         await waitFor(() async => (await state())['excluded'] == true);
         expect((await styles.read()).allowCapture, isFalse);
@@ -329,6 +397,72 @@ void main() {
         await capture.stop();
         await tester.pump(const Duration(milliseconds: 200));
         expect((await state())['visible'], isFalse);
+        // Exercise the full monitor independently of the OCR crop. Only the
+        // owned fixture is read back or saved; no desktop pixels are exported.
+        await screen.invokeMethod<int>('start', {
+          'displayId': capture.display!.id,
+        });
+        final marker = Uint8List(120 * 60 * 4);
+        for (int i = 0; i < marker.length; i += 4) {
+          marker[i] = 230;
+          marker[i + 1] = 40;
+          marker[i + 2] = 180;
+          marker[i + 3] = 255;
+        }
+        await native.invokeMethod<Object?>('configure', {
+          'visible': true,
+          'allowCapture': true,
+          'locked': true,
+          'restore': false,
+          'displayId': capture.display!.id,
+          'region': const CaptureRegion(160, 140, 120, 60).toMap(),
+        });
+        await native.invokeMethod<bool>('frame', {
+          'width': 120,
+          'height': 60,
+          'rgba': marker,
+        });
+        Map<Object?, Object?> fullState = {};
+        for (int i = 0; i < 50; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          fullState = (await screen.invokeMapMethod<Object?, Object?>(
+            'snapshot',
+          ))!;
+          if ((fullState['frames'] as int) > 1 &&
+              (fullState['frameIteration'] as int) >=
+                  (fullState['exclusionIteration'] as int)) {
+            break;
+          }
+        }
+        expect(fullState['sessionExclusion'], true);
+        expect(fullState['width'], capture.display!.width);
+        expect(fullState['height'], capture.display!.height);
+        expect(fullState['remoteSamples'], 0);
+        final monitorFixture = (await screen.invokeMapMethod<Object?, Object?>(
+          'debugCapturedFixture',
+        ))!;
+        final monitorPixels = monitorFixture['rgba'] as Uint8List;
+        expect(monitorPixels.length, expected.length);
+        var monitorMatches = 0;
+        for (int i = 0; i < monitorPixels.length; i += 4) {
+          if ((monitorPixels[i] - expected[i]).abs() <= 2 &&
+              (monitorPixels[i + 1] - expected[i + 1]).abs() <= 2 &&
+              (monitorPixels[i + 2] - expected[i + 2]).abs() <= 2) {
+            monitorMatches++;
+          }
+        }
+        expect(monitorMatches / (monitorPixels.length / 4), greaterThan(0.98));
+        final desktopMarker = (await native.invokeMapMethod<Object?, Object?>(
+          'debugScreenshot',
+        ))!;
+        expect((desktopMarker['rgba'] as Uint8List).take(4), [
+          230,
+          40,
+          180,
+          255,
+        ], reason: 'A normal desktop capture must still see the overlay');
+        await native.invokeMethod<Object?>('configure', {'visible': false});
+        await screen.invokeMethod<void>('stop');
         await windowManager.setSize(const Size(680, 520));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
@@ -343,6 +477,13 @@ void main() {
                 'height': below['height'],
               },
               'remoteSampleMs': sampleTimes,
+              'sessionExclusion': captureState['sessionExclusion'],
+              'hiddenSamples': captureState['remoteSamples'],
+              'cropOriginalPixelShare': matching / (actual.length / 4),
+              'monitorOriginalPixelShare':
+                  monitorMatches / (monitorPixels.length / 4),
+              'desktopOverlayVisible': true,
+              'backgroundRepair': true,
               'providerRequests': provider.requests,
               'note': 'Owned English/Japanese fixtures and injected translations; not real-video, cloud-quality or UU acceptance',
             }),

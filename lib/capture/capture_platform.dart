@@ -61,6 +61,7 @@ class CaptureSnapshot {
     this.error,
     this.displayId,
     this.region,
+    this.sessionExclusion,
   });
 
   final int frames;
@@ -69,6 +70,7 @@ class CaptureSnapshot {
   final String? error;
   final int? displayId;
   final CaptureRegion? region;
+  final bool? sessionExclusion;
 }
 
 class CaptureTargetWindow {
@@ -181,6 +183,7 @@ class WindowsCapturePlatform implements CapturePlatform, WindowCapturePlatform {
       height: result['height']! as int,
       error: result['error'] as String?,
       displayId: result['displayId'] as int?,
+      sessionExclusion: result['sessionExclusion'] as bool?,
       region: result['region'] == null
           ? null
           : CaptureRegion.fromMap(result['region']! as Map<Object?, Object?>),

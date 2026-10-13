@@ -1,6 +1,7 @@
 #include "ocr_service.h"
 #include "OcrLite.h"
 #include <opencv2/imgproc.hpp>
+#include <opencv2/photo.hpp>
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -12,6 +13,61 @@
 using flutter::EncodableList;
 using flutter::EncodableMap;
 using flutter::EncodableValue;
+
+namespace {
+// Repair only the OCR text's neighbourhood, using the already bundled OpenCV.
+// Missing or oversized patches retain the existing sampled-colour fallback.
+EncodableValue BackgroundPatch(const cv::Mat& bgr, const cv::Rect& box,
+    const cv::Scalar& background, const std::vector<cv::Rect>& boxes) {
+  const auto image = cv::Rect(0, 0, bgr.cols, bgr.rows);
+  const int padding = std::clamp(box.height / 7, 3, 8) + 2;
+  const auto painted = cv::Rect(box.x - padding, box.y - padding,
+      box.width + padding * 2, box.height + padding * 2) & image;
+  const int margin = std::clamp(box.height / 3, 6, 16);
+  const auto work = cv::Rect(painted.x - margin, painted.y - margin,
+      painted.width + margin * 2, painted.height + margin * 2) & image;
+  if (work.area() > 500000) return EncodableValue();
+  try {
+    cv::Mat mask(work.size(), CV_8UC1, cv::Scalar(0));
+    const auto local = cv::Rect(box.x - work.x, box.y - work.y, box.width, box.height);
+    for (int y = 0; y < local.height; ++y) {
+      const auto* pixels = bgr.ptr<cv::Vec3b>(box.y + y) + box.x;
+      auto* row = mask.ptr<uint8_t>(local.y + y) + local.x;
+      for (int x = 0; x < local.width; ++x) {
+        double distance = 0;
+        for (int c = 0; c < 3; ++c) {
+          const double difference = pixels[x][c] - background[c];
+          distance += difference * difference;
+        }
+        if (distance > 3600) row[x] = 255;
+      }
+    }
+    if (cv::countNonZero(mask(local)) > box.area() * 0.65)
+      cv::rectangle(mask, cv::Rect(painted.x - work.x, painted.y - work.y,
+          painted.width, painted.height), cv::Scalar(255), -1);
+    const int stroke = padding * 2 + 1;
+    cv::dilate(mask, mask, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(stroke, stroke)));
+    // Adjacent source text must never be used to rebuild another line's background.
+    for (const auto& other : boxes) {
+      if (other == box) continue;
+      const auto covered = cv::Rect(other.x - padding, other.y - padding,
+          other.width + padding * 2, other.height + padding * 2) & work;
+      if (!covered.empty()) cv::rectangle(mask,
+          cv::Rect(covered.x - work.x, covered.y - work.y, covered.width, covered.height), cv::Scalar(255), -1);
+    }
+    cv::Mat repaired, rgba;
+    cv::inpaint(bgr(work), mask, repaired, 3, cv::INPAINT_TELEA);
+    cv::cvtColor(repaired(cv::Rect(painted.x - work.x, painted.y - work.y,
+        painted.width, painted.height)), rgba, cv::COLOR_BGR2RGBA);
+    std::vector<uint8_t> bytes(rgba.datastart, rgba.dataend);
+    return EncodableValue(EncodableMap{{EncodableValue("x"), EncodableValue(painted.x)},
+        {EncodableValue("y"), EncodableValue(painted.y)},
+        {EncodableValue("width"), EncodableValue(painted.width)},
+        {EncodableValue("height"), EncodableValue(painted.height)},
+        {EncodableValue("rgba"), EncodableValue(bytes)}});
+  } catch (const cv::Exception&) { return EncodableValue(); }
+}
+}
 
 struct OcrService::Impl {
   std::mutex mutex;
@@ -112,6 +168,9 @@ struct OcrService::Impl {
           return a.y != b.y ? a.y < b.y : a.x < b.x;
         });
         EncodableList output;
+        std::vector<cv::Rect> boxes;
+        for (const auto& line : ordered)
+          boxes.push_back(cv::Rect(line.x, line.y, line.width, line.height) & cv::Rect(0, 0, bgr.cols, bgr.rows));
         for (const auto& line : ordered) {
           const auto box = cv::Rect(line.x, line.y, line.width, line.height) & cv::Rect(0, 0, bgr.cols, bgr.rows);
           if (box.empty()) continue;
@@ -127,7 +186,8 @@ struct OcrService::Impl {
           {EncodableValue("confidence"), EncodableValue(static_cast<double>(line.confidence))},
           {EncodableValue("x"), EncodableValue(line.x)}, {EncodableValue("y"), EncodableValue(line.y)},
           {EncodableValue("width"), EncodableValue(line.width)}, {EncodableValue("height"), EncodableValue(line.height)},
-          {EncodableValue("background"), EncodableValue(background)}});
+          {EncodableValue("background"), EncodableValue(background)},
+          {EncodableValue("patch"), BackgroundPatch(bgr, box, color, boxes)}});
         }
         lock.lock();
         if (token == generation) {

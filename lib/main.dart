@@ -549,13 +549,13 @@ class _CaptureWindowState extends State<CaptureWindow>
                                 ? null
                                 : () => showCaptureWindows(context, state),
                             icon: const Icon(Icons.window, size: 18),
-                            label: const Text('绑定窗口'),
+                            label: const Text('跟随窗口'),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
                               state.targetWindow == null
-                                  ? '绑定播放器或浏览器，可减少远程显示时的闪烁'
+                                  ? '可选：让识别区域跟随播放器或浏览器移动'
                                   : '窗口：${state.targetWindow!.title}（框选区域跟随窗口）',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,

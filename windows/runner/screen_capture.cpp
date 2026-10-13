@@ -7,6 +7,8 @@
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.UI.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <winrt/Windows.Graphics.DirectX.h>
@@ -227,6 +229,24 @@ bool SelectRegion(const Display& display, RECT& rectangle) {
 
 using Pixels = CapturePixels;
 
+std::vector<HWND> CaptureExclusions(HWND ignored) {
+  struct Selection { HWND ignored; std::vector<HWND> windows; } selection{ignored, {}};
+  EnumWindows(+[](HWND window, LPARAM context) -> BOOL {
+    auto& selection = *reinterpret_cast<Selection*>(context);
+    DWORD process = 0;
+    GetWindowThreadProcessId(window, &process);
+    // Include hidden windows too: showing an existing overlay must not require
+    // another configuration change. Test source windows remain capture input.
+    if (process == GetCurrentProcessId() && window != selection.ignored)
+      selection.windows.push_back(window);
+    return TRUE;
+  }, reinterpret_cast<LPARAM>(&selection));
+  std::sort(selection.windows.begin(), selection.windows.end(), [](HWND a, HWND b) {
+    return reinterpret_cast<uintptr_t>(a) < reinterpret_cast<uintptr_t>(b);
+  });
+  return selection.windows;
+}
+
 struct PixelLease {
   std::shared_ptr<Pixels> pixels;
   FlutterDesktopPixelBuffer buffer{};
@@ -325,11 +345,40 @@ struct ScreenCapture::State {
   winrt::com_ptr<ID3D11Texture2D> staging;
   Direct3D11CaptureFramePool pool{nullptr};
   GraphicsCaptureSession session{nullptr};
+  IDisplayGraphicsCaptureSession display_session{nullptr};
+  HWND ignored_window = nullptr;
+  std::vector<HWND> excluded_windows;
+  bool exclusions_initialized = false;
+  uint64_t exclusion_iteration = 0, latest_iteration = 0;
+  uint64_t discarded_frames = 0;
+  int exclusion_updates = 0;
   winrt::event_token arrival{};
   winrt::event_token closed{};
   GraphicsCaptureItem item{nullptr};
   flutter::TextureRegistrar* registrar = nullptr;
   int64_t texture_id = -1;
+
+  // Called under processing, before either copying a frame or serving OCR.
+  void SyncExclusions() {
+    if (!display_session) return;
+    const auto windows = CaptureExclusions(ignored_window);
+    if (exclusions_initialized && windows == excluded_windows) return;
+    std::vector<winrt::Windows::UI::WindowId> ids;
+    for (const auto window : windows)
+      ids.push_back({static_cast<uint64_t>(reinterpret_cast<uintptr_t>(window))});
+    const auto iteration = display_session.SetWindowExclusionList(ids);
+    const auto applied = display_session.GetWindowExclusionList();
+    if (applied.Size() != ids.size() || std::any_of(ids.begin(), ids.end(), [&](const auto id) {
+      return std::none_of(applied.begin(), applied.end(), [&](const auto item) { return id.Value == item.Value; });
+    })) throw std::runtime_error("系统未能排除译文窗口，请停止后重新开始");
+    excluded_windows = windows;
+    exclusions_initialized = true;
+    exclusion_iteration = iteration;
+    ++exclusion_updates;
+    // A cached image may precede a newly created overlay's exclusion.
+    std::lock_guard lock(pixels_mutex);
+    latest.reset();
+  }
 
   void Frame(const Direct3D11CaptureFramePool& sender) {
     std::lock_guard lock(processing);
@@ -337,6 +386,14 @@ struct ScreenCapture::State {
     try {
       auto frame = sender.TryGetNextFrame();
       if (!frame) return;
+      SyncExclusions();
+      uint64_t iteration = 0;
+      if (display_session) {
+        const auto configured = frame.try_as<IDirect3D11CaptureFrame3>();
+        if (!configured) throw std::runtime_error("系统无法验证画面捕获排除，请重新开始");
+        iteration = configured.ConfigurationIteration();
+        if (iteration < exclusion_iteration) { ++discarded_frames; return; }
+      }
       auto now = std::chrono::steady_clock::now();
       if (now - last_frame < std::chrono::milliseconds(100)) return;
       last_frame = now;
@@ -382,6 +439,7 @@ struct ScreenCapture::State {
       {
         std::lock_guard pixels_lock(pixels_mutex);
         latest = std::move(pixels);
+        latest_iteration = iteration;
         ++frames;
       }
       if (running) registrar->MarkTextureFrameAvailable(texture_id);
@@ -461,12 +519,19 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
             state_->display_bounds.left + state_->crop.right, state_->display_bounds.top + state_->crop.bottom};
         // Window capture has its own surface; visible desktop overlays are not
         // its input. Never hide them for a window-bound OCR sample.
-        if (!state_->target_window) pixels = SampleBehindOverlays(bounds);
+        if (state_->display_session) {
+          std::lock_guard processing_lock(state_->processing);
+          state_->SyncExclusions();
+          std::lock_guard pixels_lock(state_->pixels_mutex);
+          pixels = state_->latest;
+        } else if (!state_->target_window) pixels = SampleBehindOverlays(bounds);
         if (pixels) {
-          ++state_->remote_samples;
-          state_->remote_sample_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::steady_clock::now() - started).count());
-        } else { std::lock_guard lock(state_->pixels_mutex); pixels = state_->latest; }
+          if (!state_->display_session) {
+            ++state_->remote_samples;
+            state_->remote_sample_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started).count());
+          }
+        } else if (!state_->display_session) { std::lock_guard lock(state_->pixels_mutex); pixels = state_->latest; }
         if (pixels) ocr_.Submit(std::move(pixels));
       }
       result->Success(EncodableValue(ocr_.Snapshot()));
@@ -515,6 +580,13 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
                          {EncodableValue("width"), EncodableValue(0)},
                          {EncodableValue("height"), EncodableValue(0)}};
       if (state_) {
+        std::lock_guard processing_lock(state_->processing);
+        value[EncodableValue("sessionExclusion")] = EncodableValue(state_->display_session != nullptr);
+        value[EncodableValue("exclusionUpdates")] = EncodableValue(state_->exclusion_updates);
+        value[EncodableValue("excludedWindows")] = EncodableValue(static_cast<int>(state_->excluded_windows.size()));
+        value[EncodableValue("discardedFrames")] = EncodableValue(static_cast<int64_t>(state_->discarded_frames));
+        value[EncodableValue("exclusionIteration")] = EncodableValue(static_cast<int64_t>(state_->exclusion_iteration));
+        value[EncodableValue("frameIteration")] = EncodableValue(static_cast<int64_t>(state_->latest_iteration));
         value[EncodableValue("remoteSamples")] = EncodableValue(state_->remote_samples);
         value[EncodableValue("remoteSampleMs")] = EncodableValue(state_->remote_sample_ms);
         std::lock_guard lock(state_->pixels_mutex);
@@ -583,8 +655,20 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
       std::lock_guard lock(state_->pixels_mutex);
       if (!state_->latest) throw std::runtime_error("No fixture frame");
       const auto& pixels = *state_->latest;
-      result->Success(EncodableValue(EncodableMap{{EncodableValue("width"), EncodableValue(pixels.width)},
-          {EncodableValue("height"), EncodableValue(pixels.height)}, {EncodableValue("rgba"), EncodableValue(pixels.bytes)}}));
+      RECT fixture{}; GetWindowRect(fixture_, &fixture);
+      const auto source = state_->target_window ? WindowBounds(state_->target_window) : state_->display_bounds;
+      const RECT captured{source.left + state_->crop.left, source.top + state_->crop.top,
+          source.left + state_->crop.right, source.top + state_->crop.bottom};
+      RECT region{};
+      if (!IntersectRect(&region, &fixture, &captured)) throw std::runtime_error("Fixture is outside capture");
+      const int width = region.right - region.left, height = region.bottom - region.top;
+      std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4);
+      for (int y = 0; y < height; ++y)
+        std::memcpy(rgba.data() + static_cast<size_t>(y) * width * 4,
+            pixels.bytes.data() + (static_cast<size_t>(region.top - captured.top + y) * pixels.width + region.left - captured.left) * 4,
+            static_cast<size_t>(width) * 4);
+      result->Success(EncodableValue(EncodableMap{{EncodableValue("width"), EncodableValue(width)},
+          {EncodableValue("height"), EncodableValue(height)}, {EncodableValue("rgba"), EncodableValue(rgba)}}));
       return;
     }
     auto read_fixture = [&call]() {
@@ -790,6 +874,9 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
     state->crop = crop;
     state->display_bounds = display.bounds;
     state->target_window = target_window;
+#ifndef NDEBUG
+    state->ignored_window = fixture_;
+#endif
     state->registrar = registrar_;
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
     D3D_FEATURE_LEVEL level{};
@@ -851,6 +938,10 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
       }
     });
     state->session = state->pool.CreateCaptureSession(state->item);
+    if (!target_window) {
+      state->display_session = state->session.try_as<IDisplayGraphicsCaptureSession>();
+      state->SyncExclusions();
+    }
     state->session.IsCursorCaptureEnabled(false);
     if (auto settings = state->session.try_as<IGraphicsCaptureSession5>())
       settings.MinUpdateInterval(std::chrono::milliseconds(100));

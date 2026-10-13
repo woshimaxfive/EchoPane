@@ -10,6 +10,22 @@ import 'text_blocks.dart';
 import '../subtitles/caption_stabilizer.dart';
 import '../subtitles/caption_source.dart';
 
+class OcrBackgroundPatch {
+  const OcrBackgroundPatch(this.bounds, this.rgba);
+  final Rect bounds;
+  final Uint8List rgba;
+  factory OcrBackgroundPatch.fromMap(Map<Object?, Object?> map) =>
+      OcrBackgroundPatch(
+        Rect.fromLTWH(
+          (map['x']! as num).toDouble(),
+          (map['y']! as num).toDouble(),
+          (map['width']! as num).toDouble(),
+          (map['height']! as num).toDouble(),
+        ),
+        map['rgba']! as Uint8List,
+      );
+}
+
 class OcrLine {
   const OcrLine(
     this.text,
@@ -17,6 +33,8 @@ class OcrLine {
     this.bounds = Rect.zero,
     this.background = 0xff202830,
     this.sourceLineHeight,
+    this.sourceLines = const [],
+    this.backgroundPatch,
   });
   final String text;
   final double confidence;
@@ -25,6 +43,8 @@ class OcrLine {
   final Rect bounds;
   final int background;
   final double? sourceLineHeight;
+  final List<OcrLine> sourceLines;
+  final OcrBackgroundPatch? backgroundPatch;
   double get lineHeight => sourceLineHeight ?? bounds.height;
 }
 
@@ -84,6 +104,7 @@ class OcrController extends CaptionSource {
   List<OcrLine> spatialLines = [];
   int imageWidth = 0, imageHeight = 0;
   int durationMs = 0;
+  int revision = 0;
   int recognized = 0;
   int skipped = 0;
   bool _polling = false;
@@ -169,6 +190,11 @@ class OcrController extends CaptionSource {
               (map['height'] as num? ?? 0).toDouble(),
             ),
             background: map['background'] as int? ?? 0xff202830,
+            backgroundPatch: map['patch'] == null
+                ? null
+                : OcrBackgroundPatch.fromMap(
+                    map['patch']! as Map<Object?, Object?>,
+                  ),
           );
         }).toList();
         final next = groupTextBlocks(raw);
@@ -176,6 +202,7 @@ class OcrController extends CaptionSource {
           spatialLines = next;
           imageWidth = state['width'] as int? ?? 0;
           imageHeight = state['height'] as int? ?? 0;
+          revision = state['revision'] as int? ?? 0;
           _stabilizer.submit(
             next,
             jsonEncode(

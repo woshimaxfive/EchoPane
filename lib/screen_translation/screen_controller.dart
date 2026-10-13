@@ -104,8 +104,10 @@ class ScreenOverlayController extends ChangeNotifier {
       ocr.error,
       ocr.imageWidth,
       ocr.imageHeight,
+      settings.mode == ScreenTranslationMode.replace ? ocr.revision : 0,
       ocr.capture.outputDisplay?.id,
       ocr.capture.outputRegion?.toMap(),
+      ocr.capture.snapshot?.sessionExclusion,
       for (final line in ocr.spatialLines)
         [
           line.text,
@@ -184,7 +186,13 @@ class ScreenOverlayController extends ChangeNotifier {
                 .where((text) => text.trim().isNotEmpty)
                 .length -
             blocks.length;
-        notice = missing > 0 ? '有 $missing 处译文下方空间不足，请调整识别区域或使用替换模式' : null;
+        notice = missing > 0
+            ? '有 $missing 处译文下方空间不足，请调整识别区域或使用替换模式'
+            : ocr.capture.targetWindow == null &&
+                  settings.allowCapture &&
+                  ocr.capture.snapshot?.sessionExclusion == false
+            ? '当前系统使用兼容取样，译文可能闪烁；可关闭远程显示或选择跟随窗口'
+            : null;
         if (blocks.isEmpty) {
           await _hide();
           if (!_disposed) notifyListeners();
@@ -214,6 +222,8 @@ class ScreenOverlayController extends ChangeNotifier {
                 ),
                 block.fontSize,
                 block.background,
+                backdrop: block.backdrop,
+                paintBackground: block.paintBackground,
               ),
           ],
         );
