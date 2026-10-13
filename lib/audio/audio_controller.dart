@@ -287,6 +287,7 @@ class AudioController extends CaptionSource {
     if (stopping) return;
     _lastDiagnostics = diagnostics;
     ++_generation;
+    stopping = true;
     _wanted = starting = running = recognizing = false;
     lines = [];
     level = 0;
@@ -294,15 +295,22 @@ class AudioController extends CaptionSource {
     error = failure is AudioStreamFailure ? failure.message : '实时语音连接中断，请重新开始';
     final session = _stream;
     _stream = null;
-    await _speechSubscription?.cancel();
-    _speechSubscription = null;
-    await session?.cancel();
+    _notify();
     try {
-      await platform.stop();
+      await _speechSubscription?.cancel();
+      _speechSubscription = null;
+      await session?.cancel();
     } catch (_) {
       /* Preserve the original failure. */
+    } finally {
+      try {
+        await platform.stop();
+      } catch (_) {
+        /* Preserve the original failure. */
+      }
+      stopping = false;
+      _notify();
     }
-    _notify();
   }
 
   Future<void> _startStream(int token) async {
