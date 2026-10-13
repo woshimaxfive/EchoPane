@@ -8,9 +8,23 @@ class SpeechUpdate {
     required this.translation,
     this.language = '',
     this.isFinal = false,
+    this.sequence,
   });
   final String id, source, translation, language;
   final bool isFinal;
+
+  /// Source-turn order, independent of when translated text arrives.
+  final int? sequence;
+}
+
+abstract interface class AudioStreamDiagnostics {
+  List<Map<String, Object?>> get diagnostics;
+}
+
+/// A skipped turn; capture and subsequent turns may continue.
+class AudioStreamNotice implements Exception {
+  const AudioStreamNotice(this.message);
+  final String message;
 }
 
 abstract interface class AudioStreamSession {

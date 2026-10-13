@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -19,6 +21,7 @@ class AudioPanel extends StatelessWidget {
       final downloading = models.phase == ModelPhase.downloading;
       final status =
           controller.error ??
+          controller.notice ??
           (controller.isCloud
               ? controller.stopping
                     ? '正在完成最后一段…'
@@ -183,6 +186,15 @@ class AudioPanel extends StatelessWidget {
                   ),
                 ),
               ),
+              if (controller.isCloud &&
+                  (controller.error != null || controller.notice != null) &&
+                  controller.diagnostics.isNotEmpty)
+                TextButton(
+                  onPressed: () => Clipboard.setData(
+                    ClipboardData(text: jsonEncode(controller.diagnostics)),
+                  ),
+                  child: const Text('复制诊断'),
+                ),
               if (downloading && !controller.isCloud)
                 TextButton(onPressed: models.cancel, child: const Text('取消')),
               if (!controller.isCloud &&

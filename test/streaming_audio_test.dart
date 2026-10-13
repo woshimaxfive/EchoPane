@@ -169,9 +169,11 @@ void main() {
     expect(decoder.accept(responseDone('r1')).single.id, 's1');
     expect(decoder.accept(responseDone('r2')).single.translation, '你好2');
     expect(
-      () => decoder.accept(translated('unlinked', 'r3', 'must not be paired')),
-      throwsA(isA<AudioStreamFailure>()),
+      decoder.accept(translated('unlinked', 'r3', 'must not be paired')),
+      isEmpty,
     );
+    decoder.expire(const Duration(seconds: 5));
+    expect(decoder.takeNotices(), hasLength(1));
   });
 
   test('interrupted text.done never becomes a complete history entry', () {
@@ -184,9 +186,10 @@ void main() {
       false,
     );
     expect(
-      () => decoder.accept(responseDone('r', 'incomplete')),
-      throwsA(isA<AudioStreamFailure>()),
+      decoder.accept(responseDone('r', 'incomplete')).single.isFinal,
+      false,
     );
+    expect(decoder.takeNotices(), hasLength(1));
   });
 
   test('credential destinations are restricted to verified Beijing realtime endpoints', () {

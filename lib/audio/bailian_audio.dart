@@ -38,124 +38,412 @@ String bailianAudioTarget(String value) {
 }
 
 class _Turn {
-  _Turn(this.id);
+  _Turn(this.id, this.sequence);
   final String id;
-  String source = '', translation = '', language = '';
-  bool sourceFinal = false, textDone = false, responseDone = false;
-  SpeechUpdate get update => SpeechUpdate(
-    id: id,
-    source: source,
-    translation: translation,
-    language: language,
-    isFinal:
-        sourceFinal &&
-        textDone &&
-        responseDone &&
-        source.trim().isNotEmpty &&
-        translation.trim().isNotEmpty,
-  );
+  final int sequence;
+  String source = '', language = '', output = '';
+  bool sourceFinal = false, retired = false, finalCounted = false;
+  Duration lastSourceAt = Duration.zero;
+}
+
+class _Output {
+  _Output(this.id, this.receivedAt);
+  final String id;
+  final Duration receivedAt;
+  String source = '', response = '', text = '';
+  bool textDone = false, skipped = false;
+}
+
+class _Response {
+  String status = '';
+  Duration endedAt = Duration.zero;
 }
 
 /// Vendor event IDs and conversation links stay inside this adapter.
 class BailianAudioDecoder {
+  static const _grace = Duration(seconds: 5);
   final _turns = <String, _Turn>{};
-  final _parents = <String, String>{};
-  final _responseItems = <String, String>{};
+  final _outputs = <String, _Output>{};
+  final _responses = <String, _Response>{};
+  final _retired = <String>{};
+  final _notices = <String>[];
+  final _trace = <Map<String, Object?>>[];
+  final _aliases = <String, int>{};
+  int _sequence = 0, _alias = 0, _pairingFailures = 0;
 
-  _Turn? _sourceFor(String item) {
-    final visited = <String>{};
-    while (item.isNotEmpty && visited.add(item)) {
-      final turn = _turns[item];
-      if (turn != null) return turn;
-      item = _parents[item] ?? '';
-    }
-    return null;
+  List<Map<String, Object?>> get diagnostics => [
+    for (final row in _trace) Map.unmodifiable(row),
+  ];
+  List<String> takeNotices() {
+    final result = List<String>.of(_notices);
+    _notices.clear();
+    return result;
   }
 
-  List<SpeechUpdate> accept(Map<String, dynamic> event) {
-    final type = event['type'];
-    if (type == 'conversation.item.created') {
+  int? _name(String id) {
+    if (id.isEmpty) return null;
+    final name = _aliases.putIfAbsent(id, () => ++_alias);
+    while (_aliases.length > 512) {
+      _aliases.remove(_aliases.keys.first);
+    }
+    return name;
+  }
+
+  void _record(String type, String item, Duration now, {String detail = ''}) {
+    _trace.add({
+      'ms': now.inMilliseconds,
+      'event': type,
+      if (item.isNotEmpty) 'item': _name(item),
+      if (detail.isNotEmpty) 'state': detail,
+    });
+    if (_trace.length > 128) _trace.removeAt(0);
+  }
+
+  String _identifier(Object? value) {
+    final id = value as String? ?? '';
+    if (id.length > 256) throw const FormatException();
+    return id;
+  }
+
+  _Turn _turn(String id) =>
+      _turns.putIfAbsent(id, () => _Turn(id, ++_sequence));
+  _Output _output(String id, Duration now) =>
+      _outputs.putIfAbsent(id, () => _Output(id, now));
+
+  SpeechUpdate _update(_Turn turn) {
+    final output = _outputs[turn.output];
+    final response = _responses[output?.response];
+    final finalPair =
+        !turn.retired &&
+        turn.sourceFinal &&
+        output?.textDone == true &&
+        response?.status == 'completed' &&
+        turn.source.trim().isNotEmpty &&
+        output!.text.trim().isNotEmpty;
+    if (finalPair && !turn.finalCounted) {
+      turn.finalCounted = true;
+      _pairingFailures = 0;
+    }
+    return SpeechUpdate(
+      id: turn.id,
+      source: turn.source,
+      translation: turn.retired ? '' : output?.text ?? '',
+      language: turn.language,
+      sequence: turn.sequence,
+      isFinal: finalPair,
+    );
+  }
+
+  void _remember(String id) {
+    if (id.isNotEmpty) _retired.add(id);
+    while (_retired.length > 512) {
+      _retired.remove(_retired.first);
+    }
+  }
+
+  void _skip(String id, Duration now, {bool pairing = true}) {
+    if (_retired.contains(id)) return;
+    final output = _outputs[id];
+    if (output != null) output.skipped = true;
+    final turn = _turns[id] ?? _turns[output?.source];
+    if (turn?.retired == true) return;
+    if (turn != null) {
+      turn.retired = true;
+      _remember(turn.id);
+      _remember(turn.output);
+    }
+    _remember(id);
+    _record(
+      'turn.skipped',
+      id,
+      now,
+      detail: pairing ? 'unpaired' : 'incomplete',
+    );
+    _notices.add(pairing ? '有一段实时字幕未能配对，已跳过并继续监听' : '有一段实时翻译未完整完成，已保留原文并继续监听');
+    if (pairing && ++_pairingFailures >= 3) {
+      throw const AudioStreamFailure('连续多段实时字幕无法配对，请重新开始；可复制诊断信息');
+    }
+  }
+
+  List<SpeechUpdate> accept(
+    Map<String, dynamic> event, {
+    Duration now = Duration.zero,
+  }) {
+    final type = event['type'] as String? ?? '';
+    if (type.length > 128) throw const FormatException();
+    final id = _identifier(event['item_id']);
+    // Do not record transcript, audio, credentials or arbitrary provider errors.
+    _record(type, id, now);
+    final changed = <String>{};
+    if (type == 'input_audio_buffer.speech_started') {
+      if (id.isNotEmpty && !_retired.contains(id)) _turn(id);
+    } else if (type == 'conversation.item.created') {
       final item = event['item'] as Map?;
-      final id = item?['id'] as String? ?? '';
+      final itemId = _identifier(item?['id']);
       final content = item?['content'] as List? ?? [];
-      if (id.isEmpty) return [];
-      if (content.any((c) => c is Map && c['type'] == 'input_audio')) {
-        _turns.putIfAbsent(id, () => _Turn(id));
+      if (itemId.isNotEmpty &&
+          (!_retired.contains(itemId) || _outputs[itemId]?.skipped == true)) {
+        final input =
+            item?['role'] == 'user' ||
+            content.any((c) => c is Map && c['type'] == 'input_audio');
+        if (input) {
+          _turn(itemId);
+        } else {
+          final previous = _identifier(event['previous_item_id']);
+          if (_retired.contains(previous) && !_turns.containsKey(previous)) {
+            _remember(itemId);
+          } else if (previous.isNotEmpty) {
+            final output = _output(itemId, now);
+            if (output.source.isNotEmpty && output.source != previous) {
+              throw const AudioStreamFailure('实时字幕的消息关联发生冲突，请重新开始');
+            }
+            final turn = _turn(previous);
+            if (turn.output.isNotEmpty && turn.output != itemId) {
+              throw const AudioStreamFailure('同一句语音收到冲突的翻译关联，请重新开始');
+            }
+            output.source = previous;
+            turn.output = itemId;
+            if (output.skipped) {
+              turn.retired = true;
+              _remember(turn.id);
+            }
+            changed.add(previous);
+            _record(
+              'turn.linked',
+              itemId,
+              now,
+              detail: 'source=${_name(previous)}',
+            );
+          }
+        }
       }
-      final previous = event['previous_item_id'] as String?;
-      if (previous != null) _parents[id] = previous;
-      _trim();
-      return [];
-    }
-    final item = event['item_id'] as String? ?? '';
-    if (type == 'conversation.item.input_audio_transcription.text' ||
+    } else if (type == 'conversation.item.input_audio_transcription.text' ||
         type == 'conversation.item.input_audio_transcription.completed') {
-      if (item.isEmpty) return [];
-      final turn = _turns.putIfAbsent(item, () => _Turn(item));
-      if (type == 'conversation.item.input_audio_transcription.completed') {
-        turn.source = event['transcript'] as String? ?? '';
-        turn.sourceFinal = true;
-      } else if (!turn.sourceFinal) {
-        // These are replaceable snapshots, not append-only token deltas.
-        turn.source = '${event['text'] ?? ''}${event['stash'] ?? ''}';
+      if (id.isNotEmpty &&
+          (!_retired.contains(id) ||
+              (_turns[id]?.retired == true &&
+                  _turns[id]?.sourceFinal == false))) {
+        final turn = _turn(id);
+        turn.lastSourceAt = now;
+        if (type.endsWith('.completed')) {
+          turn.source = event['transcript'] as String? ?? '';
+          turn.sourceFinal = true;
+        } else if (!turn.sourceFinal) {
+          // Replace snapshots instead of appending provisional revisions.
+          turn.source = '${event['text'] ?? ''}${event['stash'] ?? ''}';
+        }
+        turn.language = event['language'] as String? ?? turn.language;
+        changed.add(id);
       }
-      turn.language = event['language'] as String? ?? turn.language;
-      _trim();
-      return [turn.update];
-    }
-    if (type == 'response.text.text' || type == 'response.text.done') {
-      final turn = _sourceFor(item);
-      if (turn == null) {
-        throw const AudioStreamFailure('实时译文无法对应原文，请重新开始');
+    } else if (type == 'conversation.item.input_audio_transcription.failed') {
+      if (id.isNotEmpty) {
+        _skip(id, now);
+        changed.add(id);
       }
-      final response = event['response_id'] as String? ?? '';
-      if (response.isNotEmpty) _responseItems[response] = item;
-      if (type == 'response.text.done') {
-        turn.translation = event['text'] as String? ?? '';
-        turn.textDone = true;
-      } else if (!turn.textDone) {
-        turn.translation = '${event['text'] ?? ''}${event['stash'] ?? ''}';
+    } else if (type == 'response.text.text' || type == 'response.text.done') {
+      if (id.isNotEmpty && !_retired.contains(id)) {
+        final output = _output(id, now);
+        final response = _identifier(event['response_id']);
+        if (output.response.isNotEmpty &&
+            response.isNotEmpty &&
+            output.response != response) {
+          throw const AudioStreamFailure('实时译文的响应编号发生冲突，请重新开始');
+        }
+        if (response.isNotEmpty) output.response = response;
+        if (type.endsWith('.done')) {
+          output.text = event['text'] as String? ?? '';
+          output.textDone = true;
+        } else if (!output.textDone) {
+          output.text = '${event['text'] ?? ''}${event['stash'] ?? ''}';
+        }
+        if (output.source.isNotEmpty) changed.add(output.source);
       }
-      return [turn.update];
-    }
-    if (type == 'response.done') {
+    } else if (type == 'response.output_item.added' ||
+        type == 'response.output_item.done') {
+      final item = event['item'] as Map?;
+      final itemId = _identifier(item?['id']);
+      final response = _identifier(event['response_id']);
+      if (itemId.isNotEmpty && !_retired.contains(itemId)) {
+        final output = _output(itemId, now);
+        if (output.response.isNotEmpty && output.response != response) {
+          throw const AudioStreamFailure('实时译文的响应编号发生冲突，请重新开始');
+        }
+        if (response.isNotEmpty) output.response = response;
+        if (output.source.isNotEmpty) changed.add(output.source);
+      }
+    } else if (type == 'response.done') {
       final response = event['response'] as Map?;
-      final id = response?['id'] as String? ?? '';
-      final turn = _sourceFor(_responseItems[id] ?? '');
-      if (turn == null) return [];
-      turn.responseDone = response?['status'] == 'completed';
-      if (!turn.responseDone) {
-        throw const AudioStreamFailure('实时翻译未完整完成，请重新开始');
+      final responseId = _identifier(response?['id']);
+      if (responseId.isNotEmpty && !_retired.contains(responseId)) {
+        final state = _responses.putIfAbsent(responseId, _Response.new);
+        final status = response?['status'] as String? ?? '';
+        if (!{
+          'completed',
+          'cancelled',
+          'failed',
+          'incomplete',
+        }.contains(status)) {
+          throw const AudioStreamFailure('实时翻译返回未知的完成状态，请重新开始');
+        }
+        _record('response.finished', responseId, now, detail: status);
+        if (state.status.isNotEmpty && state.status != status) {
+          throw const AudioStreamFailure('实时翻译的完成状态发生冲突，请重新开始');
+        }
+        if (state.status.isEmpty) {
+          state.status = status;
+          state.endedAt = now;
+        }
+        for (final item in response?['output'] as List? ?? []) {
+          if (item is! Map || item['id'] is! String) continue;
+          final itemId = _identifier(item['id']);
+          if (_retired.contains(itemId)) continue;
+          final output = _output(itemId, now);
+          if (output.response.isNotEmpty && output.response != responseId) {
+            throw const AudioStreamFailure('实时译文的响应编号发生冲突，请重新开始');
+          }
+          output.response = responseId;
+        }
+        for (final output in _outputs.values) {
+          if (output.response == responseId && output.source.isNotEmpty) {
+            changed.add(output.source);
+          }
+        }
       }
-      return [turn.update];
     }
-    return [];
+    for (final turn in _turns.values) {
+      if (turn.sourceFinal && turn.source.trim().isEmpty && !turn.retired) {
+        turn.retired = true;
+        _remember(turn.id);
+        _remember(turn.output);
+      }
+    }
+    for (final output in _outputs.values) {
+      final status = _responses[output.response]?.status ?? '';
+      if (status.isNotEmpty &&
+          status != 'completed' &&
+          !_retired.contains(output.id)) {
+        _skip(output.id, now, pairing: false);
+        if (output.source.isNotEmpty) changed.add(output.source);
+      }
+    }
+    _trim();
+    return [
+      for (final id in changed)
+        if (_turns.containsKey(id)) _update(_turns[id]!),
+    ];
+  }
+
+  List<SpeechUpdate> expire(Duration now, {bool finished = false}) {
+    final changed = <String>{};
+    for (final turn in _turns.values) {
+      if (!turn.retired &&
+          turn.sourceFinal &&
+          turn.output.isEmpty &&
+          (finished || now - turn.lastSourceAt >= _grace)) {
+        _skip(turn.id, now);
+        changed.add(turn.id);
+      }
+    }
+    for (final output in _outputs.values) {
+      if (_retired.contains(output.id)) continue;
+      final turn = _turns[output.source];
+      final response = _responses[output.response];
+      final missingLink = turn == null;
+      final last =
+          turn == null ||
+              turn.lastSourceAt < (response?.endedAt ?? Duration.zero)
+          ? response?.endedAt ?? output.receivedAt
+          : turn.lastSourceAt;
+      final incomplete =
+          turn == null ||
+          !turn.sourceFinal ||
+          !output.textDone ||
+          response?.status != 'completed' ||
+          output.text.trim().isEmpty;
+      if (incomplete &&
+          (finished ||
+              (missingLink
+                  ? now - output.receivedAt >= _grace
+                  : response?.status.isNotEmpty == true &&
+                        now - last >= _grace))) {
+        _skip(output.id, now);
+        if (turn != null) changed.add(turn.id);
+      }
+    }
+    _trim();
+    return [
+      for (final id in changed)
+        if (_turns.containsKey(id)) _update(_turns[id]!),
+    ];
   }
 
   void _trim() {
-    // Retain recent links for out-of-order final events without unbounded growth.
     while (_turns.length > 128) {
-      final oldest = _turns.keys.first;
-      _turns.remove(oldest);
-      _parents.removeWhere((k, v) => k == oldest || v == oldest);
-      _responseItems.removeWhere((k, v) => !_parents.containsKey(v));
+      final old = _turns.values
+          .where((turn) => turn.retired || _update(turn).isFinal)
+          .firstOrNull;
+      if (old == null) throw const AudioStreamFailure('实时字幕待完成内容过多，请重新开始');
+      _remember(old.id);
+      _turns.remove(old.id);
+      final output = _outputs.remove(old.output);
+      _remember(old.output);
+      if (output != null) {
+        _responses.remove(output.response);
+        _remember(output.response);
+      }
     }
-    while (_parents.length > 512) {
-      _parents.remove(_parents.keys.first);
+    while (_outputs.length > 256) {
+      final old = _outputs.values
+          .where((o) => _retired.contains(o.id))
+          .firstOrNull;
+      if (old == null) throw const AudioStreamFailure('实时字幕待关联内容过多，请重新开始');
+      _outputs.remove(old.id);
     }
+    while (_responses.length > 256) {
+      final old = _responses.keys
+          .where(
+            (id) => !_outputs.values.any(
+              (o) => o.response == id && !_retired.contains(o.id),
+            ),
+          )
+          .firstOrNull;
+      if (old == null) {
+        throw const AudioStreamFailure('实时字幕待完成响应过多，请重新开始');
+      }
+      _responses.remove(old);
+      _remember(old);
+    }
+    final characters =
+        _turns.values.fold<int>(0, (n, t) => n + t.source.length) +
+        _outputs.values.fold<int>(0, (n, o) => n + o.text.length);
+    if (characters > 1000000) throw const AudioStreamFailure('实时字幕缓存过大，请重新开始');
+  }
+
+  void clear() {
+    _turns.clear();
+    _outputs.clear();
+    _responses.clear();
+    _retired.clear();
+    _notices.clear();
   }
 }
 
-class BailianAudioSession implements AudioStreamSession {
+class BailianAudioSession
+    implements AudioStreamSession, AudioStreamDiagnostics {
   BailianAudioSession(
     TranslationSettings settings,
     String key, {
     String source = 'auto',
+    Future<WebSocket> Function(Uri, Map<String, String>)? connect,
   }) {
+    _dial = connect;
     _ready = _connect(settings, key, source);
   }
   final _controller = StreamController<SpeechUpdate>();
   final _decoder = BailianAudioDecoder();
+  final _clock = Stopwatch()..start();
+  Timer? _pendingTimer;
+  Future<WebSocket> Function(Uri, Map<String, String>)? _dial;
   final _configured = Completer<void>(), _finished = Completer<void>();
   final _client = HttpClient();
   WebSocket? _socket;
@@ -168,6 +456,8 @@ class BailianAudioSession implements AudioStreamSession {
   Stream<SpeechUpdate> get updates => _controller.stream;
   @override
   Future<void> get ready => _ready;
+  @override
+  List<Map<String, Object?>> get diagnostics => _decoder.diagnostics;
 
   Future<void> _connect(
     TranslationSettings settings,
@@ -178,11 +468,15 @@ class BailianAudioSession implements AudioStreamSession {
       if (key.isEmpty) throw const AudioStreamFailure('请先在翻译设置中保存百炼 Key');
       final endpoint = bailianAudioEndpoint(settings);
       final target = bailianAudioTarget(settings.target);
-      _socket = await WebSocket.connect(
-        endpoint.toString(),
-        headers: {'Authorization': 'Bearer $key'},
-        customClient: _client,
-      ).timeout(const Duration(seconds: 20));
+      final headers = {'Authorization': 'Bearer $key'};
+      _socket =
+          await (_dial?.call(endpoint, headers) ??
+                  WebSocket.connect(
+                    endpoint.toString(),
+                    headers: headers,
+                    customClient: _client,
+                  ))
+              .timeout(const Duration(seconds: 20));
       if (_cancelled) {
         await _socket!.close();
         return;
@@ -213,6 +507,15 @@ class BailianAudioSession implements AudioStreamSession {
         },
       });
       await _configured.future.timeout(const Duration(seconds: 15));
+      if (!_cancelled && !_failed) {
+        _pendingTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+          try {
+            _publish(_decoder.expire(_clock.elapsed));
+          } catch (e) {
+            _fail(e is AudioStreamFailure ? e.message : '实时字幕状态异常，请重新开始');
+          }
+        });
+      }
     } catch (e) {
       await cancel();
       throw e is AudioStreamFailure
@@ -270,20 +573,29 @@ class BailianAudioSession implements AudioStreamSession {
         _configured.complete();
       }
       if (event['type'] == 'session.finished') {
+        _publish(_decoder.expire(_clock.elapsed, finished: true));
         if (!_finished.isCompleted) _finished.complete();
         return;
       }
-      for (final update in _decoder.accept(event)) {
-        _controller.add(update);
-      }
+      _publish(_decoder.accept(event, now: _clock.elapsed));
     } catch (e) {
       _fail(e is AudioStreamFailure ? e.message : '实时语音返回了无法读取的结果，请重新开始');
+    }
+  }
+
+  void _publish(List<SpeechUpdate> updates) {
+    for (final update in updates) {
+      _controller.add(update);
+    }
+    for (final message in _decoder.takeNotices()) {
+      _controller.addError(AudioStreamNotice(message));
     }
   }
 
   void _fail(String message) {
     if (_cancelled || _failed) return;
     _failed = true;
+    _pendingTimer?.cancel();
     final failure = AudioStreamFailure(message);
     if (!_configured.isCompleted) _configured.completeError(failure);
     if (!_controller.isClosed) _controller.addError(failure);
@@ -320,6 +632,8 @@ class BailianAudioSession implements AudioStreamSession {
   Future<void> cancel() async {
     if (_cancelled) return;
     _cancelled = true;
+    _pendingTimer?.cancel();
+    _decoder.clear();
     _outgoing.clear();
     if (!_configured.isCompleted) _configured.complete();
     if (!_finished.isCompleted) _finished.complete();

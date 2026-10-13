@@ -94,6 +94,17 @@ class AudioController extends CaptionSource {
   String _activeSpeech = '', _target = '';
   final _confirmed = <ConfirmedCaption>[];
   final _turns = <String, CaptionTurn>{};
+  final _turnOrders = <String, int>{};
+  int? _activeOrder;
+  String? notice;
+  List<Map<String, Object?>> _lastDiagnostics = [];
+  List<Map<String, Object?>> get diagnostics {
+    final session = _stream;
+    return session is AudioStreamDiagnostics
+        ? (session as AudioStreamDiagnostics).diagnostics
+        : _lastDiagnostics;
+  }
+
   bool provisional = false;
   bool _captureStarted = false;
   bool get isCloud => backend == AudioBackend.cloud;
@@ -127,11 +138,21 @@ class AudioController extends CaptionSource {
   List<ConfirmedCaption>? get captionConfirmed =>
       isStreaming ? List.unmodifiable(_confirmed) : null;
   @override
-  List<CaptionTurn> get captionTurns => isStreaming
-      ? List.unmodifiable(_turns.values)
-      : lines.isEmpty
-      ? []
-      : [CaptionTurn('local:$_nativeRevision', text, '', true)];
+  List<CaptionTurn> get captionTurns {
+    if (!isStreaming) {
+      return lines.isEmpty
+          ? []
+          : [CaptionTurn('local:$_nativeRevision', text, '', true)];
+    }
+    final turns = List<CaptionTurn>.of(_turns.values);
+    if (_turnOrders.isNotEmpty) {
+      turns.sort(
+        (a, b) => (_turnOrders[a.id] ?? 0).compareTo(_turnOrders[b.id] ?? 0),
+      );
+    }
+    return List.unmodifiable(turns);
+  }
+
   @override
   String get captionSession => '$_generation:$_nativeSession';
   @override
@@ -187,6 +208,8 @@ class AudioController extends CaptionSource {
     _captureStarted = false;
     _confirmed.clear();
     _turns.clear();
+    _turnOrders.clear();
+    _activeOrder = null;
     _speechIds.clear();
     _activeSpeech = '';
     _directTranslations = [];
@@ -202,15 +225,25 @@ class AudioController extends CaptionSource {
         update.translation,
         update.isFinal,
       );
+      if (update.sequence != null) _turnOrders[update.id] = update.sequence!;
     }
     while (_turns.length > 8) {
-      _turns.remove(_turns.keys.first);
+      final oldest = captionTurns.first.id;
+      _turns.remove(oldest);
+      _turnOrders.remove(oldest);
     }
-    if (_speechIds.add(update.id)) _activeSpeech = update.id;
+    if (_speechIds.add(update.id) &&
+        (update.sequence == null ||
+            _activeOrder == null ||
+            update.sequence! > _activeOrder!)) {
+      _activeSpeech = update.id;
+      _activeOrder = update.sequence;
+    }
     while (_speechIds.length > 256) {
       _speechIds.remove(_speechIds.first);
     }
     if (update.isFinal && !_confirmed.any((c) => c.id == update.id)) {
+      notice = null;
       _confirmed.add(
         ConfirmedCaption(update.id, update.source, update.translation, _target),
       );
@@ -227,7 +260,14 @@ class AudioController extends CaptionSource {
   }
 
   Future<void> _streamFailed(Object failure, int token) async {
-    if (_disposed || token != _generation || stopping) return;
+    if (_disposed || token != _generation) return;
+    if (failure is AudioStreamNotice) {
+      notice = failure.message;
+      _notify();
+      return;
+    }
+    if (stopping) return;
+    _lastDiagnostics = diagnostics;
     ++_generation;
     _wanted = starting = running = recognizing = false;
     lines = [];
@@ -283,6 +323,8 @@ class AudioController extends CaptionSource {
     _wanted = true;
     starting = true;
     error = null;
+    notice = null;
+    _lastDiagnostics = [];
     lines = [];
     dropped = samples = durationMs = 0;
     detectedLanguage = '';
@@ -339,6 +381,7 @@ class AudioController extends CaptionSource {
         }
       } finally {
         _wanted = false;
+        _lastDiagnostics = diagnostics;
         ++_generation;
         running = starting = recognizing = false;
         await _speechSubscription?.cancel();
