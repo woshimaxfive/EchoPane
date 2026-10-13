@@ -86,7 +86,7 @@ class _ScreenOverlayDialogState extends State<_ScreenOverlayDialog> {
                   key: const Key('screen-overlay-remote'),
                   title: const Text('允许远程桌面和录屏显示译文'),
                   subtitle: const Text(
-                    '识别取样时会短暂隐藏译文，部分画面可能闪烁。关闭后可减少闪烁，但远程软件可能看不到译文。',
+                    '建议绑定播放器或浏览器窗口，减少闪烁。整屏取样与译文重叠时仍会短暂隐藏译文；关闭此项后远程软件可能看不到译文。',
                   ),
                   value: settings.allowCapture,
                   onChanged: controller.saving
@@ -100,7 +100,7 @@ class _ScreenOverlayDialogState extends State<_ScreenOverlayDialog> {
                 const Text('译文窗口允许鼠标穿透。可从这里关闭；Ctrl + Alt + T 也可隐藏（快捷键可用时）。'),
                 const SizedBox(height: 10),
                 const Text(
-                  '当前替换使用采样背景色，复杂背景会留下色块。下方模式空间不足时会跳过该块，避免盖住其他原文。',
+                  '多行正文会合并后翻译。下方模式可使用识别区域下方的空间，空间不足时会提示；替换使用采样背景色，复杂背景仍会留下色块。',
                   style: TextStyle(fontSize: 12, color: Color(0xff708196)),
                 ),
                 if (controller.enabled && !controller.visible)

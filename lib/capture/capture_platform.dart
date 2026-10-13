@@ -7,6 +7,8 @@ class CaptureDisplay {
     required this.width,
     required this.height,
     required this.primary,
+    this.x = 0,
+    this.y = 0,
   });
 
   final int id;
@@ -14,6 +16,7 @@ class CaptureDisplay {
   final int width;
   final int height;
   final bool primary;
+  final int x, y;
 
   factory CaptureDisplay.fromMap(Map<Object?, Object?> map) => CaptureDisplay(
     id: map['id']! as int,
@@ -21,6 +24,8 @@ class CaptureDisplay {
     width: map['width']! as int,
     height: map['height']! as int,
     primary: map['primary']! as bool,
+    x: map['x'] as int? ?? 0,
+    y: map['y'] as int? ?? 0,
   );
 }
 
@@ -54,12 +59,40 @@ class CaptureSnapshot {
     required this.width,
     required this.height,
     this.error,
+    this.displayId,
+    this.region,
   });
 
   final int frames;
   final int width;
   final int height;
   final String? error;
+  final int? displayId;
+  final CaptureRegion? region;
+}
+
+class CaptureTargetWindow {
+  const CaptureTargetWindow({
+    required this.id,
+    required this.processId,
+    required this.title,
+    required this.displayId,
+  });
+  final int id, processId, displayId;
+  final String title;
+  factory CaptureTargetWindow.fromMap(Map<Object?, Object?> map) =>
+      CaptureTargetWindow(
+        id: map['id']! as int,
+        processId: map['processId']! as int,
+        title: map['title']! as String,
+        displayId: map['displayId']! as int,
+      );
+}
+
+abstract interface class WindowCapturePlatform {
+  Future<List<CaptureTargetWindow>> windows();
+  Future<CaptureRegion?> selectWindowRegion(CaptureTargetWindow window);
+  Future<int> startWindow(CaptureTargetWindow window, CaptureRegion? region);
 }
 
 abstract interface class CapturePlatform {
@@ -70,8 +103,43 @@ abstract interface class CapturePlatform {
   Future<CaptureSnapshot> snapshot();
 }
 
-class WindowsCapturePlatform implements CapturePlatform {
+class WindowsCapturePlatform implements CapturePlatform, WindowCapturePlatform {
   static const channel = MethodChannel('echopane/capture');
+  @override
+  Future<List<CaptureTargetWindow>> windows() async =>
+      (await channel.invokeListMethod<Object?>('windows') ?? [])
+          .map(
+            (value) =>
+                CaptureTargetWindow.fromMap(value! as Map<Object?, Object?>),
+          )
+          .toList();
+  @override
+  Future<CaptureRegion?> selectWindowRegion(CaptureTargetWindow window) async {
+    final value = await channel.invokeMapMethod<Object?, Object?>(
+      'selectRegion',
+      {
+        'displayId': window.displayId,
+        'windowId': window.id,
+        'processId': window.processId,
+      },
+    );
+    return value == null ? null : CaptureRegion.fromMap(value);
+  }
+
+  @override
+  Future<int> startWindow(
+    CaptureTargetWindow window,
+    CaptureRegion? region,
+  ) async {
+    final value = await channel.invokeMethod<int>('start', {
+      'displayId': window.displayId,
+      'windowId': window.id,
+      'processId': window.processId,
+      if (region != null) 'region': region.toMap(),
+    });
+    if (value == null) throw StateError('未能创建窗口预览');
+    return value;
+  }
 
   @override
   Future<List<CaptureDisplay>> displays() async {
@@ -112,6 +180,10 @@ class WindowsCapturePlatform implements CapturePlatform {
       width: result['width']! as int,
       height: result['height']! as int,
       error: result['error'] as String?,
+      displayId: result['displayId'] as int?,
+      region: result['region'] == null
+          ? null
+          : CaptureRegion.fromMap(result['region']! as Map<Object?, Object?>),
     );
   }
 }

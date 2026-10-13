@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../capture/capture_controller.dart';
 import '../capture/capture_platform.dart';
 import 'model_store.dart';
+import 'text_blocks.dart';
 import '../subtitles/caption_stabilizer.dart';
 import '../subtitles/caption_source.dart';
 
@@ -15,6 +16,7 @@ class OcrLine {
     this.confidence, {
     this.bounds = Rect.zero,
     this.background = 0xff202830,
+    this.sourceLineHeight,
   });
   final String text;
   final double confidence;
@@ -22,6 +24,8 @@ class OcrLine {
   /// Physical pixels relative to the captured region.
   final Rect bounds;
   final int background;
+  final double? sourceLineHeight;
+  double get lineHeight => sourceLineHeight ?? bounds.height;
 }
 
 abstract interface class OcrPlatform {
@@ -153,7 +157,7 @@ class OcrController extends CaptionSource {
       loading = state['loading'] == true;
       if (generation == _generation) error = state['error'] as String?;
       if (generation == _generation && capture.running) {
-        final next = (state['lines'] as List<Object?>? ?? []).map((value) {
+        final raw = (state['lines'] as List<Object?>? ?? []).map((value) {
           final map = value! as Map<Object?, Object?>;
           return OcrLine(
             map['text']! as String,
@@ -167,6 +171,7 @@ class OcrController extends CaptionSource {
             background: map['background'] as int? ?? 0xff202830,
           );
         }).toList();
+        final next = groupTextBlocks(raw);
         if (error == null) {
           spatialLines = next;
           imageWidth = state['width'] as int? ?? 0;

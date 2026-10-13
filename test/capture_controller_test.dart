@@ -33,7 +33,53 @@ class FakePlatform implements CapturePlatform {
       : reading!.future;
 }
 
+class WindowPlatform extends FakePlatform implements WindowCapturePlatform {
+  CaptureTargetWindow? startedTarget;
+  CaptureRegion? startedRegion;
+  @override
+  Future<List<CaptureTargetWindow>> windows() async => [
+    const CaptureTargetWindow(
+      id: 10,
+      processId: 12,
+      title: 'Player',
+      displayId: 0,
+    ),
+  ];
+  @override
+  Future<CaptureRegion?> selectWindowRegion(CaptureTargetWindow window) async =>
+      selection;
+  @override
+  Future<int> startWindow(
+    CaptureTargetWindow window,
+    CaptureRegion? region,
+  ) async {
+    startedTarget = window;
+    startedRegion = region;
+    return 11;
+  }
+}
+
 void main() {
+  test('binding uses window coordinates; full-display selection clears the binding', () async {
+    final platform = WindowPlatform()
+      ..selection = const CaptureRegion(5, 10, 100, 40);
+    final capture = CaptureController(platform);
+    await capture.initialize();
+    await capture.chooseWindow((await capture.targetWindows()).single);
+    await capture.selectRegion();
+    await capture.start();
+    expect(platform.startedTarget?.id, 10);
+    expect(platform.startedRegion?.y, 10);
+    expect(
+      capture.outputRegion,
+      isNull,
+      reason: 'Do not treat window-relative OCR crop as monitor placement',
+    );
+    await capture.useFullDisplay();
+    expect(capture.targetWindow, isNull);
+    expect(capture.region, isNull);
+    capture.dispose();
+  });
   test(
     'stopping drains a pending start and does not resurrect its texture',
     () async {

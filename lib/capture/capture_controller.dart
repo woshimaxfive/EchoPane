@@ -14,6 +14,27 @@ class CaptureController extends ChangeNotifier {
   List<CaptureDisplay> displays = [];
   CaptureDisplay? display;
   CaptureRegion? region;
+  CaptureTargetWindow? targetWindow;
+  bool get supportsWindowCapture => platform is WindowCapturePlatform;
+  CaptureRegion? get outputRegion =>
+      snapshot?.region ?? (targetWindow == null ? region : null);
+  CaptureDisplay? get outputDisplay =>
+      displays.where((d) => d.id == snapshot?.displayId).firstOrNull ?? display;
+
+  Future<List<CaptureTargetWindow>> targetWindows() =>
+      (platform as WindowCapturePlatform).windows();
+
+  Future<void> chooseWindow(CaptureTargetWindow value) async {
+    if (busy) return;
+    await stop();
+    if (_disposed) return;
+    targetWindow = value;
+    display =
+        displays.where((d) => d.id == value.displayId).firstOrNull ?? display;
+    region = null;
+    _notify();
+  }
+
   CapturePhase phase = CapturePhase.idle;
   CaptureSnapshot? snapshot;
   int? textureId;
@@ -50,6 +71,7 @@ class CaptureController extends ChangeNotifier {
     await stop();
     if (_disposed) return;
     display = value;
+    targetWindow = null;
     region = null;
     _notify();
   }
@@ -62,7 +84,12 @@ class CaptureController extends ChangeNotifier {
     error = null;
     _notify();
     try {
-      final chosen = await platform.selectRegion(current.id);
+      final target = targetWindow;
+      final chosen = target == null
+          ? await platform.selectRegion(current.id)
+          : await (platform as WindowCapturePlatform).selectWindowRegion(
+              target,
+            );
       if (!_disposed && chosen != null) region = chosen;
       phase = CapturePhase.idle;
     } catch (exception) {
@@ -76,6 +103,7 @@ class CaptureController extends ChangeNotifier {
     if (busy) return;
     await stop();
     region = null;
+    targetWindow = null;
     _notify();
   }
 
@@ -95,7 +123,13 @@ class CaptureController extends ChangeNotifier {
     snapshot = null;
     _notify();
     try {
-      final id = await platform.start(current.id, region);
+      final target = targetWindow;
+      final id = target == null
+          ? await platform.start(current.id, region)
+          : await (platform as WindowCapturePlatform).startWindow(
+              target,
+              region,
+            );
       if (_disposed || generation != _generation) {
         await platform.stop();
         return;

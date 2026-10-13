@@ -26,6 +26,7 @@ List<PositionedTranslation> layoutScreenTranslations({
   required List<String> translations,
   required ScreenTranslationMode mode,
   double fontScale = 1,
+  double belowMinimum = 0,
 }) {
   if (lines.length != translations.length) return [];
   final screen = Offset.zero & size;
@@ -40,7 +41,7 @@ List<PositionedTranslation> layoutScreenTranslations({
     }
     final original = source.intersect(screen);
     if (original.isEmpty) continue;
-    final font = (source.height * 0.75 * fontScale).clamp(10.0, 64.0);
+    final font = (lines[i].lineHeight * 0.75 * fontScale).clamp(10.0, 64.0);
     Rect area;
     if (mode == ScreenTranslationMode.replace) {
       area = original.inflate(2).intersect(screen);
@@ -50,8 +51,22 @@ List<PositionedTranslation> layoutScreenTranslations({
         size.width,
       );
       final left = original.left.clamp(0.0, size.width - width);
-      final top = original.bottom + 2;
-      double bottom = (top + source.height * 1.5 + 8).clamp(0.0, size.height);
+      final top = original.bottom + 2 < belowMinimum
+          ? belowMinimum
+          : original.bottom + 2;
+      final painter = TextPainter(
+        text: TextSpan(
+          text: translations[i],
+          style: TextStyle(
+            fontSize: font,
+            height: 1.1,
+            fontFamily: 'Microsoft YaHei',
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: (width - 4).clamp(1, size.width));
+      double bottom = (top + painter.height + 8).clamp(0.0, size.height);
+      painter.dispose();
       for (final other in lines) {
         final box = other.bounds;
         if (box.top >= top && box.left < left + width && box.right > left) {
@@ -60,6 +75,20 @@ List<PositionedTranslation> layoutScreenTranslations({
       }
       if (bottom - top < 10) continue;
       area = Rect.fromLTRB(left, top, left + width, bottom).intersect(screen);
+      final minimum = TextPainter(
+        text: TextSpan(
+          text: translations[i],
+          style: const TextStyle(
+            fontSize: 8,
+            height: 1.1,
+            fontFamily: 'Microsoft YaHei',
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: (area.width - 4).clamp(1, size.width));
+      final fits = minimum.height <= area.height - 4;
+      minimum.dispose();
+      if (!fits) continue;
       // Never cover original words or earlier translations in bilingual mode.
       if (lines.any((line) => line.bounds.overlaps(area)) ||
           placed.any((item) => item.bounds.overlaps(area))) {

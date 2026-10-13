@@ -78,6 +78,27 @@ EncodableMap RegionMap(const RECT& rectangle) {
           {EncodableValue("height"), EncodableValue(static_cast<int>(rectangle.bottom - rectangle.top))}};
 }
 
+RECT WindowBounds(HWND window) {
+  if (!IsWindow(window)) throw std::runtime_error("目标窗口已关闭，请重新绑定");
+  if (IsIconic(window)) throw std::runtime_error("目标窗口已最小化，请恢复后重新开始");
+  RECT bounds{};
+  if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &bounds, sizeof(bounds))) &&
+      !GetWindowRect(window, &bounds))
+    throw std::runtime_error("无法读取目标窗口位置，请重新绑定");
+  return bounds;
+}
+
+EncodableMap WindowMap(HWND window) {
+  DWORD process = 0;
+  GetWindowThreadProcessId(window, &process);
+  wchar_t title[1024]{};
+  GetWindowTextW(window, title, 1024);
+  return {{EncodableValue("id"), EncodableValue(static_cast<int64_t>(reinterpret_cast<intptr_t>(window)))},
+    {EncodableValue("processId"), EncodableValue(static_cast<int64_t>(process))},
+    {EncodableValue("title"), EncodableValue(winrt::to_string(title))},
+    {EncodableValue("displayId"), EncodableValue(static_cast<int64_t>(reinterpret_cast<intptr_t>(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST))))}};
+}
+
 struct Selection {
   POINT anchor{};
   POINT cursor{};
@@ -296,6 +317,8 @@ struct ScreenCapture::State {
   std::chrono::steady_clock::time_point last_frame{};
   RECT crop{};
   RECT display_bounds{};
+  HWND target_window = nullptr;
+  winrt::Windows::Graphics::SizeInt32 capture_size{};
   int remote_samples = 0, remote_sample_ms = 0;
   winrt::com_ptr<ID3D11Device> device;
   winrt::com_ptr<ID3D11DeviceContext> context;
@@ -323,6 +346,11 @@ struct ScreenCapture::State {
       D3D11_TEXTURE2D_DESC source_desc{};
       source->GetDesc(&source_desc);
       const auto content = frame.ContentSize();
+      if (target_window) {
+        WindowBounds(target_window);
+        if (content.Width != capture_size.Width || content.Height != capture_size.Height)
+          throw std::runtime_error("目标窗口尺寸已改变，请重新框选或重新开始");
+      }
       if (crop.right > content.Width || crop.bottom > content.Height ||
           crop.right > static_cast<LONG>(source_desc.Width) || crop.bottom > static_cast<LONG>(source_desc.Height))
         throw std::runtime_error("显示器尺寸已改变，请重新选择捕获范围");
@@ -431,7 +459,9 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
         const auto started = std::chrono::steady_clock::now();
         const RECT bounds{state_->display_bounds.left + state_->crop.left, state_->display_bounds.top + state_->crop.top,
             state_->display_bounds.left + state_->crop.right, state_->display_bounds.top + state_->crop.bottom};
-        pixels = SampleBehindOverlays(bounds);
+        // Window capture has its own surface; visible desktop overlays are not
+        // its input. Never hide them for a window-bound OCR sample.
+        if (!state_->target_window) pixels = SampleBehindOverlays(bounds);
         if (pixels) {
           ++state_->remote_samples;
           state_->remote_sample_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -452,8 +482,26 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
           {EncodableValue("name"), EncodableValue("显示器 " + std::to_string(index + 1) + (display.primary ? "（主屏）" : ""))},
           {EncodableValue("width"), EncodableValue(static_cast<int>(display.bounds.right - display.bounds.left))},
           {EncodableValue("height"), EncodableValue(static_cast<int>(display.bounds.bottom - display.bounds.top))},
+          {EncodableValue("x"), EncodableValue(static_cast<int>(display.bounds.left))},
+          {EncodableValue("y"), EncodableValue(static_cast<int>(display.bounds.top))},
           {EncodableValue("primary"), EncodableValue(display.primary)}});
       }
+      result->Success(EncodableValue(values));
+      return;
+    }
+    if (method == "windows") {
+      EncodableList values;
+      EnumWindows(+[](HWND window, LPARAM context) -> BOOL {
+        DWORD process = 0, cloaked = 0;
+        GetWindowThreadProcessId(window, &process);
+        if (process == GetCurrentProcessId() || !IsWindowVisible(window) || IsIconic(window) ||
+            GetWindow(window, GW_OWNER) || (GetWindowLongPtr(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) ||
+            GetWindowTextLengthW(window) == 0) return TRUE;
+        DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+        if (cloaked) return TRUE;
+        reinterpret_cast<EncodableList*>(context)->emplace_back(WindowMap(window));
+        return TRUE;
+      }, reinterpret_cast<LPARAM>(&values));
       result->Success(EncodableValue(values));
       return;
     }
@@ -470,6 +518,26 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
         value[EncodableValue("remoteSamples")] = EncodableValue(state_->remote_samples);
         value[EncodableValue("remoteSampleMs")] = EncodableValue(state_->remote_sample_ms);
         std::lock_guard lock(state_->pixels_mutex);
+        if (state_->target_window && state_->running) {
+          try {
+            const auto bounds = WindowBounds(state_->target_window);
+            const auto monitor = MonitorFromWindow(state_->target_window, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO info{sizeof(MONITORINFO)};
+            if (!GetMonitorInfo(monitor, &info)) throw std::runtime_error("目标显示器不可用，请重新开始");
+            const RECT placed{bounds.left + state_->crop.left - info.rcMonitor.left,
+              bounds.top + state_->crop.top - info.rcMonitor.top,
+              bounds.left + state_->crop.right - info.rcMonitor.left,
+              bounds.top + state_->crop.bottom - info.rcMonitor.top};
+            if (placed.left < 0 || placed.top < 0 || placed.right > info.rcMonitor.right - info.rcMonitor.left ||
+                placed.bottom > info.rcMonitor.bottom - info.rcMonitor.top)
+              throw std::runtime_error("识别区域超出单个显示器，请移回窗口后重新开始");
+            value[EncodableValue("displayId")] = EncodableValue(static_cast<int64_t>(reinterpret_cast<intptr_t>(monitor)));
+            value[EncodableValue("region")] = EncodableValue(RegionMap(placed));
+          } catch (const std::exception& exception) {
+            state_->error = exception.what();
+            state_->running = false;
+          }
+        }
         value[EncodableValue("frames")] = EncodableValue(static_cast<int64_t>(state_->frames));
         if (state_->latest) {
           value[EncodableValue("width")] = EncodableValue(state_->latest->width);
@@ -493,6 +561,23 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
       return;
     }
 #ifndef NDEBUG
+    if (method == "debugFixtureWindow") {
+      if (!fixture_) throw std::runtime_error("No fixture window");
+      result->Success(EncodableValue(WindowMap(fixture_)));
+      return;
+    }
+    if (method == "debugMoveFixture") {
+      if (!fixture_) throw std::runtime_error("No fixture window");
+      const auto& values = std::get<EncodableMap>(*call.arguments());
+      RECT rect{}; GetWindowRect(fixture_, &rect);
+      const auto resized = values.find(EncodableValue("resize"));
+      const bool resize = resized != values.end() && std::get<bool>(resized->second);
+      SetWindowPos(fixture_, HWND_TOPMOST, rect.left + Integer(values, "dx"), rect.top + Integer(values, "dy"),
+          resize ? rect.right - rect.left + 20 : 0, resize ? rect.bottom - rect.top + 20 : 0,
+          (resize ? 0 : SWP_NOSIZE) | SWP_NOACTIVATE);
+      result->Success();
+      return;
+    }
     if (method == "debugCapturedFixture") {
       if (!fixture_ || !state_) throw std::runtime_error("Owned capture fixture required");
       std::lock_guard lock(state_->pixels_mutex);
@@ -634,7 +719,24 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
     }
     const auto& arguments = std::get<EncodableMap>(*call.arguments());
     const auto displays = Displays();
-    const int64_t display_id = Number(arguments, "displayId");
+    HWND target_window = nullptr;
+    if (arguments.find(EncodableValue("windowId")) != arguments.end()) {
+      target_window = reinterpret_cast<HWND>(static_cast<intptr_t>(Number(arguments, "windowId")));
+      WindowBounds(target_window);
+      DWORD process = 0;
+      GetWindowThreadProcessId(target_window, &process);
+      if (process != Number(arguments, "processId") || GetAncestor(target_window, GA_ROOT) != target_window)
+        throw std::runtime_error("目标窗口已改变，请重新绑定");
+#ifdef NDEBUG
+      if (process == GetCurrentProcessId()) throw std::runtime_error("不能捕获 EchoPane 自己的窗口");
+#else
+      if (process == GetCurrentProcessId() && target_window != fixture_)
+        throw std::runtime_error("不能捕获 EchoPane 自己的窗口");
+#endif
+    }
+    const int64_t display_id = target_window
+      ? static_cast<int64_t>(reinterpret_cast<intptr_t>(MonitorFromWindow(target_window, MONITOR_DEFAULTTONEAREST)))
+      : Number(arguments, "displayId");
     const auto chosen = std::find_if(displays.begin(), displays.end(), [display_id](const Display& value) {
       return static_cast<int64_t>(reinterpret_cast<intptr_t>(value.monitor)) == display_id;
     });
@@ -642,10 +744,27 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
       throw std::runtime_error("显示器已断开，请重新启动程序选择显示器");
     const auto& display = *chosen;
     RECT crop{0, 0, display.bounds.right - display.bounds.left, display.bounds.bottom - display.bounds.top};
+    RECT target_bounds{};
+    if (target_window) {
+      target_bounds = WindowBounds(target_window);
+      crop = {0, 0, target_bounds.right - target_bounds.left, target_bounds.bottom - target_bounds.top};
+    }
     if (method == "selectRegion") {
       Stop();
       const bool accepted = SelectRegion(display, crop);
       SetForegroundWindow(window_);
+      if (accepted && target_window) {
+        const auto after = WindowBounds(target_window);
+        if (!EqualRect(&after, &target_bounds)) throw std::runtime_error("框选期间目标窗口移动，请重新框选");
+        RECT absolute{crop.left + display.bounds.left, crop.top + display.bounds.top,
+          crop.right + display.bounds.left, crop.bottom + display.bounds.top};
+        RECT intersection{};
+        if (!IntersectRect(&intersection, &absolute, &target_bounds) ||
+            intersection.right - intersection.left < 8 || intersection.bottom - intersection.top < 8)
+          throw std::runtime_error("请框选目标窗口内的文字");
+        crop = {intersection.left - target_bounds.left, intersection.top - target_bounds.top,
+          intersection.right - target_bounds.left, intersection.bottom - target_bounds.top};
+      }
       if (accepted) result->Success(EncodableValue(RegionMap(crop)));
       else result->Success();
       return;
@@ -658,8 +777,8 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
       const auto& values = std::get<EncodableMap>(region->second);
       const int x = Integer(values, "x"), y = Integer(values, "y");
       const int width = Integer(values, "width"), height = Integer(values, "height");
-      const int display_width = display.bounds.right - display.bounds.left;
-      const int display_height = display.bounds.bottom - display.bounds.top;
+      const int display_width = crop.right;
+      const int display_height = crop.bottom;
       if (x < 0 || y < 0 || width < 8 || height < 8 ||
           x >= display_width || y >= display_height ||
           width > display_width - x || height > display_height - y)
@@ -670,6 +789,7 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
     state_ = state;
     state->crop = crop;
     state->display_bounds = display.bounds;
+    state->target_window = target_window;
     state->registrar = registrar_;
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
     D3D_FEATURE_LEVEL level{};
@@ -683,8 +803,11 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
     winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgi.get(), inspectable.put()));
     auto device = inspectable.as<IDirect3DDevice>();
     auto factory = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-    winrt::check_hresult(factory->CreateForMonitor(display.monitor,
+    if (target_window) winrt::check_hresult(factory->CreateForWindow(target_window,
         winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(state->item)));
+    else winrt::check_hresult(factory->CreateForMonitor(display.monitor,
+        winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(state->item)));
+    state->capture_size = state->item.Size();
     state->pool = Direct3D11CaptureFramePool::CreateFreeThreaded(device,
         DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, state->item.Size());
     D3D11_TEXTURE2D_DESC description{};
@@ -723,7 +846,7 @@ void ScreenCapture::Handle(const flutter::MethodCall<EncodableValue>& call,
     state->closed = state->item.Closed([weak = std::weak_ptr<State>(state)](auto&&, auto&&) {
       if (auto locked = weak.lock()) {
         std::lock_guard lock(locked->pixels_mutex);
-        locked->error = "显示器捕获已结束，请重新开始";
+        locked->error = locked->target_window ? "目标窗口捕获已结束，请重新绑定" : "显示器捕获已结束，请重新开始";
         locked->running = false;
       }
     });

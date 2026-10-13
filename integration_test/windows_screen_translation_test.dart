@@ -254,8 +254,11 @@ void main() {
         expect(window.overlay!.displayRows, isEmpty);
         final below = await state();
         expect(below['visible'], isTrue);
-        expect(below['width'], 1000);
-        expect(below['height'], 400);
+        expect(below['width'] as int, inInclusiveRange(1, 1000));
+        expect(
+          below['height'] as int,
+          inInclusiveRange(1, capture.display!.height),
+        );
         expect(below['excluded'], isFalse);
         expect(below['transparent'], isTrue);
         expect(await native.invokeMethod<int>('debugHitTest'), -1);

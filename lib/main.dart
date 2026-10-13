@@ -6,6 +6,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'capture/capture_controller.dart';
 import 'capture/capture_platform.dart';
+import 'capture/window_dialog.dart';
 import 'ocr/model_store.dart';
 import 'ocr/ocr_controller.dart';
 import 'screen_translation/screen_panel.dart';
@@ -537,6 +538,36 @@ class _CaptureWindowState extends State<CaptureWindow>
                     ],
                   ),
                   const SizedBox(height: 10),
+                  if (state.supportsWindowCapture)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          OutlinedButton.icon(
+                            key: const Key('capture-window'),
+                            onPressed: state.busy
+                                ? null
+                                : () => showCaptureWindows(context, state),
+                            icon: const Icon(Icons.window, size: 18),
+                            label: const Text('绑定窗口'),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              state.targetWindow == null
+                                  ? '绑定播放器或浏览器，可减少远程显示时的闪烁'
+                                  : '窗口：${state.targetWindow!.title}（框选区域跟随窗口）',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xff708196),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   Expanded(
                     flex: 2,
                     child: Container(
@@ -620,7 +651,9 @@ class _CaptureWindowState extends State<CaptureWindow>
                     children: [
                       Expanded(
                         child: Text(
-                          state.region == null
+                          state.targetWindow != null
+                              ? '范围：${state.region == null ? "整个目标窗口" : "窗口内 ${state.region!.width} × ${state.region!.height} 像素"}\n窗口移动时译文跟随；缩放或最小化后需重新开始'
+                              : state.region == null
                               ? '范围：整块显示器\n请将主窗口移出识别区域，或最小化到托盘'
                               : '范围：${state.region!.width} × ${state.region!.height} 像素\n请将主窗口移出识别区域，或最小化到托盘',
                           style: const TextStyle(

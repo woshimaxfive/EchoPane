@@ -49,6 +49,7 @@ class ScreenTranslationPanel extends StatelessWidget {
           overlay?.error;
       final status =
           error ??
+          overlay?.notice ??
           (!controller.capture.running
               ? translation?.canTranslate == false
                     ? '请先配置翻译服务；点击开始后在画面原位置显示译文'

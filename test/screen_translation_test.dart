@@ -61,8 +61,8 @@ class _ScreenPlatform implements ScreenOverlayPlatform {
     return OverlayWindowState(
       visible: visible,
       locked: true,
-      width: 320,
-      height: 180,
+      width: region?.width ?? 320,
+      height: region?.height ?? 180,
     );
   }
 
