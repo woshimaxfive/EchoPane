@@ -257,6 +257,9 @@ void main() {
     );
     await settle();
     expect(history.length, 0);
+    expect(audio.diagnostics.first['pcmQueuedMs'], 100);
+    audio.captionPresented('1', translated: true);
+    expect(audio.diagnostics.last['translationToFrameMs'], isNotNull);
     expect(audio.provisional, true);
     stream.controller.add(
       const SpeechUpdate(
@@ -297,6 +300,12 @@ void main() {
     expect(stream.finishes, 1);
     expect(history.length, 2);
     expect(audio.lines, isEmpty);
+    expect(
+      audio.diagnostics.where(
+        (row) => row['event'] == 'turn.application_timing',
+      ),
+      hasLength(2),
+    );
     expect(provider.requests, isEmpty);
     history.dispose();
     translation.dispose();

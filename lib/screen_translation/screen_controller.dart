@@ -39,6 +39,8 @@ class ScreenOverlayController extends ChangeNotifier {
   bool _disposed = false, _drawing = false, _queued = false;
   int _generation = 0;
   String _signature = '', _placement = '';
+  Timer? _emptyTimer;
+  bool _emptyExpired = false;
 
   Future<void> initialize() async {
     try {
@@ -96,6 +98,30 @@ class ScreenOverlayController extends ChangeNotifier {
 
   void _changed({bool force = false}) {
     if (_disposed) return;
+    // A single missed OCR frame should not blink a translation below the text.
+    // Replacement mode clears immediately so repaired pixels never cover a
+    // newly blank scene. Changed text, errors and stopped sessions also clear.
+    final holdEmpty =
+        visible &&
+        enabled &&
+        settings.mode == ScreenTranslationMode.below &&
+        captions.mode == RecognitionMode.screen &&
+        ocr.capture.running &&
+        ocr.error == null &&
+        translation.enabled &&
+        translation.translations.isNotEmpty &&
+        ocr.spatialLines.isEmpty;
+    if (holdEmpty && !_emptyExpired && !force) {
+      _emptyTimer ??= Timer(ocr.emptyDelay, () {
+        _emptyTimer = null;
+        _emptyExpired = true;
+        _changed(force: true);
+      });
+      return;
+    }
+    _emptyTimer?.cancel();
+    _emptyTimer = null;
+    if (!holdEmpty) _emptyExpired = false;
     final signature = jsonEncode([
       enabled,
       captions.mode.name,
@@ -295,6 +321,7 @@ class ScreenOverlayController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _emptyTimer?.cancel();
     ++_generation;
     unawaited(_hide().catchError((_) {}));
     platform.listen(null);

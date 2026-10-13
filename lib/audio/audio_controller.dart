@@ -7,6 +7,7 @@ import '../ocr/model_store.dart';
 import '../subtitles/caption_source.dart';
 import 'streaming_audio.dart';
 import 'local_audio.dart';
+import 'audio_latency.dart';
 
 enum AudioBackend { local, localStreaming, cloud }
 
@@ -98,11 +99,20 @@ class AudioController extends CaptionSource {
   int? _activeOrder;
   String? notice;
   List<Map<String, Object?>> _lastDiagnostics = [];
+  final _latency = AudioLatencyTracker();
   List<Map<String, Object?>> get diagnostics {
     final session = _stream;
-    return session is AudioStreamDiagnostics
+    if (session == null) return _lastDiagnostics;
+    final timing = isCloud ? _latency.diagnostics : <Map<String, Object?>>[];
+    final events = session is AudioStreamDiagnostics
         ? (session as AudioStreamDiagnostics).diagnostics
-        : _lastDiagnostics;
+        : <Map<String, Object?>>[];
+    return [
+      ...events.skip(
+        (events.length - (128 - timing.length)).clamp(0, events.length),
+      ),
+      ...timing,
+    ];
   }
 
   bool provisional = false;
@@ -127,6 +137,13 @@ class AudioController extends CaptionSource {
   bool get captionRunning => running;
   @override
   bool get supportsAudioSubtitles => true;
+  @override
+  void captionPresented(String id, {required bool translated}) {
+    if (isCloud && running && !_disposed) {
+      _latency.presented(id, translated: translated);
+    }
+  }
+
   @override
   String? get captionError => error;
   @override
@@ -218,6 +235,7 @@ class AudioController extends CaptionSource {
 
   void _speech(SpeechUpdate update, int token) {
     if (_disposed || token != _generation) return;
+    if (isCloud) _latency.receive(update);
     if (_turns.containsKey(update.id) || !_speechIds.contains(update.id)) {
       _turns[update.id] = CaptionTurn(
         update.id,
@@ -325,6 +343,7 @@ class AudioController extends CaptionSource {
     error = null;
     notice = null;
     _lastDiagnostics = [];
+    _latency.reset();
     lines = [];
     dropped = samples = durationMs = 0;
     detectedLanguage = '';
@@ -366,7 +385,10 @@ class AudioController extends CaptionSource {
         // Drain the final captured PCM before stopping the device, then flush the server.
         final state = await platform.snapshot();
         final pcm = state['pcm'];
-        if (pcm is Uint8List && pcm.isNotEmpty) _stream?.addPcm(pcm);
+        if (pcm is Uint8List && pcm.isNotEmpty) {
+          _stream?.addPcm(pcm);
+          if (isCloud) _latency.pcm(pcm.length);
+        }
         await platform.stop();
         await _stream?.finish();
         await Future<void>.delayed(Duration.zero);
@@ -493,6 +515,7 @@ class AudioController extends CaptionSource {
           final pcm = state['pcm'];
           if (isStreaming && pcm is Uint8List && pcm.isNotEmpty) {
             _stream?.addPcm(pcm);
+            if (isCloud) _latency.pcm(pcm.length);
           }
         }
       }

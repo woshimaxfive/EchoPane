@@ -186,10 +186,9 @@ class AudioPanel extends StatelessWidget {
                   ),
                 ),
               ),
-              if (controller.isCloud &&
-                  (controller.error != null || controller.notice != null) &&
-                  controller.diagnostics.isNotEmpty)
+              if (controller.isCloud && controller.diagnostics.isNotEmpty)
                 TextButton(
+                  key: const Key('audio-copy-diagnostics'),
                   onPressed: () => Clipboard.setData(
                     ClipboardData(text: jsonEncode(controller.diagnostics)),
                   ),

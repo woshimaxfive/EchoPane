@@ -31,15 +31,16 @@ class _MovingOcr implements OcrPlatform {
     'width': 320,
     'height': 180,
     'lines': [
-      {
-        'text': text,
-        'confidence': 0.95,
-        'x': x,
-        'y': 20,
-        'width': 150,
-        'height': 30,
-        'background': 0xff123456,
-      },
+      if (text.isNotEmpty)
+        {
+          'text': text,
+          'confidence': 0.95,
+          'x': x,
+          'y': 20,
+          'width': 150,
+          'height': 30,
+          'background': 0xff123456,
+        },
     ],
   };
 }
@@ -225,6 +226,33 @@ void main() {
           expect(ocr.spatialLines.single.bounds.left, 80);
           await waitFor(() => platform.frames == 2);
           expect(provider.requests.length, 1);
+          native.text = '';
+          await ocr.poll();
+          await Future<void>.delayed(const Duration(milliseconds: 450));
+          expect(
+            platform.visible,
+            true,
+            reason: 'A missed frame must not blink below-mode text',
+          );
+          native.text = 'Hello';
+          await ocr.poll();
+          expect(provider.requests.length, 1);
+          native.text = '';
+          await ocr.poll();
+          await waitFor(() => !platform.visible);
+          native.text = 'Hello';
+          await ocr.poll();
+          await waitFor(() => platform.frames == 3);
+          await overlay.save(
+            overlay.settings.copyWith(mode: ScreenTranslationMode.replace),
+          );
+          await waitFor(() => platform.frames == 4);
+          native.text = '';
+          await ocr.poll();
+          await waitFor(() => !platform.visible);
+          native.text = 'Hello';
+          await ocr.poll();
+          await waitFor(() => platform.frames == 5);
           native.text = 'Changed';
           await ocr.poll();
           await waitFor(() => !platform.visible);
@@ -239,7 +267,7 @@ void main() {
           await waitFor(() => provider.requests.length == 2);
           platform.pending = Completer<bool>();
           provider.requests.last.completer.complete(['改变了']);
-          await waitFor(() => platform.frames == 3);
+          await waitFor(() => platform.frames == 6);
           await overlay.close();
           platform.pending!.complete(true);
           await Future<void>.delayed(const Duration(milliseconds: 20));

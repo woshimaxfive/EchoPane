@@ -213,7 +213,9 @@ class OverlayController extends ChangeNotifier {
       return;
     }
     final signature = jsonEncode([
-      displayRows.map((row) => [row.text, row.secondary]).toList(),
+      displayRows
+          .map((row) => [row.text, row.secondary, row.turnId, row.translated])
+          .toList(),
       status,
       settings.toJson(),
       window.visible,
@@ -245,12 +247,14 @@ class OverlayController extends ChangeNotifier {
           continue;
         }
         final width = window.width, height = window.height;
+        final rows = displayRows;
+        final session = source.captionSession;
         final image = await renderSubtitles(
           width: width,
           height: height,
           scale: (window.dpi / 96).clamp(0.5, 4),
           settings: settings,
-          rows: displayRows,
+          rows: rows,
           locked: window.locked,
           status: status,
           prewrapped: true,
@@ -263,11 +267,25 @@ class OverlayController extends ChangeNotifier {
               !_disposed &&
               token == _generation &&
               window.visible) {
-            await platform.present(
+            final submitted = await platform.present(
               width,
               height,
               data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
             );
+            if (submitted &&
+                !_disposed &&
+                token == _generation &&
+                window.visible &&
+                source.captionSession == session) {
+              for (final row in rows) {
+                if (row.turnId != null && row.text.trim().isNotEmpty) {
+                  source.captionPresented(
+                    row.turnId!,
+                    translated: row.translated,
+                  );
+                }
+              }
+            }
           }
         } finally {
           image.dispose();

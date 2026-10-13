@@ -95,6 +95,7 @@ class OcrController extends CaptionSource {
   final CaptureController capture;
   final OcrModelStore models;
   final OcrPlatform platform;
+  Duration get emptyDelay => _stabilizer.emptyDelay;
   late final CaptionStabilizer<OcrLine> _stabilizer;
   Timer? _timer;
   bool ready = false;

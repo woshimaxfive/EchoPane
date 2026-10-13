@@ -39,6 +39,34 @@ Iterable<List<T>> permutations<T>(List<T> items) sync* {
 
 void main() {
   test(
+    'speech offsets keep the audio clock separate from event receipt times',
+    () {
+      final decoder = BailianAudioDecoder();
+      decoder.accept({
+        'type': 'input_audio_buffer.speech_started',
+        'item_id': 'private',
+        'audio_start_ms': 500,
+      }, now: const Duration(milliseconds: 900));
+      decoder.accept({
+        'type': 'input_audio_buffer.speech_stopped',
+        'item_id': 'private',
+        'audio_end_ms': 1800,
+      }, now: const Duration(milliseconds: 2500));
+      expect(decoder.diagnostics.first['ms'], 900);
+      expect(decoder.diagnostics.first['audioOffsetMs'], 500);
+      expect(decoder.diagnostics.last['ms'], 2500);
+      expect(decoder.diagnostics.last['audioOffsetMs'], 1800);
+      expect(decoder.diagnostics.last['sourceTurn'], 1);
+      decoder.accept({
+        'type': 'input_audio_buffer.speech_stopped',
+        'item_id': 'private',
+        'audio_end_ms': 'private-key-or-text',
+      });
+      expect(decoder.diagnostics.last.containsKey('audioOffsetMs'), false);
+      expect(jsonEncode(decoder.diagnostics), isNot(contains('private')));
+    },
+  );
+  test(
     'all 120 arrival orders retain the source, translation and final status',
     () {
       final events = [

@@ -5,9 +5,16 @@ import 'package:flutter/material.dart';
 import 'overlay_settings.dart';
 
 class SubtitleRow {
-  const SubtitleRow(this.text, {this.secondary = false});
+  const SubtitleRow(
+    this.text, {
+    this.secondary = false,
+    this.turnId,
+    this.translated = false,
+  });
   final String text;
   final bool secondary;
+  final String? turnId;
+  final bool translated;
 }
 
 TextStyle subtitleTextStyle(OverlaySettings settings, bool secondary) =>

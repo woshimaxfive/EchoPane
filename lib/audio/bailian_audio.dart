@@ -89,12 +89,21 @@ class BailianAudioDecoder {
     return name;
   }
 
-  void _record(String type, String item, Duration now, {String detail = ''}) {
+  void _record(
+    String type,
+    String item,
+    Duration now, {
+    String detail = '',
+    int? audioOffsetMs,
+  }) {
+    final turn = _turns[item] ?? _turns[_outputs[item]?.source];
     _trace.add({
       'ms': now.inMilliseconds,
       'event': type,
       if (item.isNotEmpty) 'item': _name(item),
+      if (turn case final known?) 'sourceTurn': known.sequence,
       if (detail.isNotEmpty) 'state': detail,
+      'audioOffsetMs': ?audioOffsetMs,
     });
     if (_trace.length > 128) _trace.removeAt(0);
   }
@@ -173,7 +182,19 @@ class BailianAudioDecoder {
     if (type.length > 128) throw const FormatException();
     final id = _identifier(event['item_id']);
     // Do not record transcript, audio, credentials or arbitrary provider errors.
-    _record(type, id, now);
+    final audioOffset = switch (type) {
+      'input_audio_buffer.speech_started' => event['audio_start_ms'],
+      'input_audio_buffer.speech_stopped' => event['audio_end_ms'],
+      _ => null,
+    };
+    _record(
+      type,
+      id,
+      now,
+      audioOffsetMs: audioOffset is int && audioOffset >= 0
+          ? audioOffset
+          : null,
+    );
     final changed = <String>{};
     if (type == 'input_audio_buffer.speech_started') {
       if (id.isNotEmpty && !_retired.contains(id)) _turn(id);

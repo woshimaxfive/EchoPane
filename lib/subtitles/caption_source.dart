@@ -19,6 +19,9 @@ abstract class CaptionSource extends ChangeNotifier {
 
   /// Recent audio turns, including revisions arriving after a newer turn.
   List<CaptionTurn>? get captionTurns => null;
+
+  /// Successful subtitle frame submission; metadata contains no display text.
+  void captionPresented(String id, {required bool translated}) {}
 }
 
 class CaptionTurn {
@@ -73,6 +76,9 @@ class CaptionRouter extends CaptionSource {
   List<CaptionTurn>? get captionTurns => active.captionTurns;
   @override
   bool get supportsAudioSubtitles => active.supportsAudioSubtitles;
+  @override
+  void captionPresented(String id, {required bool translated}) =>
+      active.captionPresented(id, translated: translated);
   @override
   void dispose() {
     screen.removeListener(_changed);

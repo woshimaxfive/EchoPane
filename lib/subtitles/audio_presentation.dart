@@ -119,53 +119,41 @@ class _Turn {
     bool catchUp = false,
   }) {
     shownAt ??= now;
-    if (settings.mode == SubtitleMode.original) {
-      translation.visible = false;
-      return original.layout(
+    List<SubtitleRow> draw(_Lane lane, int rows, bool secondary) => [
+      for (final row in lane.layout(
         width,
-        capacity,
+        rows,
         settings,
-        false,
+        secondary,
         now,
         tail: catchUp,
-      );
+      ))
+        SubtitleRow(
+          row.text,
+          secondary: row.secondary,
+          turnId: id,
+          translated: identical(lane, translation),
+        ),
+    ];
+    if (settings.mode == SubtitleMode.original) {
+      translation.visible = false;
+      return draw(original, capacity, false);
     }
     if (settings.mode == SubtitleMode.translated) {
       original.visible = false;
-      return translation.layout(
-        width,
-        capacity,
-        settings,
-        false,
-        now,
-        tail: catchUp,
-      );
+      return draw(translation, capacity, false);
     }
     if (translation.text.isEmpty) {
       translation.visible = false;
-      return original.layout(
-        width,
-        capacity,
-        settings,
-        false,
-        now,
-        tail: catchUp,
-      );
+      return draw(original, capacity, false);
     }
     if (capacity == 1) {
       original.visible = false;
-      return translation.layout(width, 1, settings, false, now, tail: catchUp);
+      return draw(translation, 1, false);
     }
     return [
-      ...original.layout(width, 1, settings, true, now, tail: catchUp),
-      ...translation.layout(
-        width,
-        capacity - 1,
-        settings,
-        false,
-        now,
-        tail: catchUp,
-      ),
+      ...draw(original, 1, true),
+      ...draw(translation, capacity - 1, false),
     ];
   }
 
