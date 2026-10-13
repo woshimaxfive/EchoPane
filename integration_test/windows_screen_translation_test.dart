@@ -61,6 +61,7 @@ class _Provider implements TranslationProvider {
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  const soakSeconds = int.fromEnvironment('ECHO_SCREEN_SOAK_SECONDS');
   testWidgets(
     'screen translations align with OCR, remain capturable and never OCR themselves',
     (tester) async {
@@ -72,8 +73,9 @@ void main() {
       // subtitle fixture. Collision behavior is covered separately in unit tests.
       Future<Map<String, Object>> fixture(
         String name,
-        List<String> lines,
-      ) async {
+        List<String> lines, {
+        double backgroundPhase = 0,
+      }) async {
         const width = 1000, height = 400;
         final recorder = ui.PictureRecorder();
         final canvas = Canvas(recorder);
@@ -81,8 +83,19 @@ void main() {
           Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
           Paint()
             ..shader =
-                const LinearGradient(
-                  colors: [Color(0xff243344), Color(0xff4a657b)],
+                LinearGradient(
+                  colors: [
+                    Color.lerp(
+                      const Color(0xff243344),
+                      const Color(0xff384856),
+                      backgroundPhase,
+                    )!,
+                    Color.lerp(
+                      const Color(0xff4a657b),
+                      const Color(0xff30495f),
+                      backgroundPhase,
+                    )!,
+                  ],
                 ).createShader(
                   Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
                 ),
@@ -361,6 +374,91 @@ void main() {
           }
         }
         expect(matching / (actual.length / 4), greaterThan(0.98));
+        final soakSamples = <Map<String, Object?>>[];
+        if (soakSeconds > 0) {
+          final backgrounds = [english];
+          for (var i = 1; i <= 3; i++) {
+            backgrounds.add(
+              await fixture('background$i', [
+                'We need to leave before sunrise.',
+                'The road is still open.',
+              ], backgroundPhase: i / 3),
+            );
+          }
+          final clock = Stopwatch()..start();
+          final resourceClock = Stopwatch()..start();
+          var updates = 0;
+          var hidden = 0;
+          var mode = ScreenTranslationMode.replace;
+          while (clock.elapsed.inSeconds < soakSeconds) {
+            final next = (clock.elapsed.inSeconds ~/ 15).isEven
+                ? ScreenTranslationMode.below
+                : ScreenTranslationMode.replace;
+            if (next != mode) {
+              mode = next;
+              await overlay.save(overlay.settings.copyWith(mode: mode));
+            }
+            final background = backgrounds[updates++ % backgrounds.length];
+            await screen.invokeMethod<void>('debugUpdateFixture', background);
+            await tester.runAsync(
+              () => Future<void>.delayed(const Duration(milliseconds: 500)),
+            );
+            await tester.pump(const Duration(milliseconds: 50));
+            await ocr.poll();
+            final captureSample = (await screen
+                .invokeMapMethod<Object?, Object?>('snapshot'))!;
+            final overlaySample = await state();
+            if (overlaySample['visible'] != true) hidden++;
+            expect(ocr.text, contains('sunrise'));
+            expect(ocr.text, isNot(contains('日出')));
+            expect(ocr.error, isNull);
+            expect(overlay.error, isNull);
+            expect(capture.running, true);
+            expect(captureSample['sessionExclusion'], true);
+            expect(captureSample['remoteSamples'], 0);
+            if (resourceClock.elapsed.inSeconds >= 15 || soakSamples.isEmpty) {
+              resourceClock.reset();
+              soakSamples.add({
+                'seconds': clock.elapsedMilliseconds / 1000,
+                'mode': mode.name,
+                'rssBytes': ProcessInfo.currentRss,
+                'frames': captureSample['frames'],
+                'overlayFrames': overlaySample['frames'],
+                'providerRequests': provider.requests,
+              });
+            }
+            expect(tester.takeException(), isNull);
+          }
+          expect(
+            hidden,
+            0,
+            reason: 'Stable text over changing backgrounds must stay visible',
+          );
+          expect(
+            provider.requests,
+            calls,
+            reason: 'Background changes must not retranslate unchanged text',
+          );
+          if (artifacts.isNotEmpty) {
+            await File('$artifacts/screen-soak-results.json').writeAsString(
+              jsonEncode({
+                'seconds': clock.elapsedMilliseconds / 1000,
+                'backgroundUpdates': updates,
+                'invisibleSamples': hidden,
+                'providerRequests': provider.requests,
+                'samples': soakSamples,
+                'scope': 'Owned changing gradient fixtures, real Windows capture/OCR/overlay, injected translations; not natural video or UU acceptance',
+                'passed': true,
+              }),
+              encoding: utf8,
+            );
+          }
+          await screen.invokeMethod<void>('debugUpdateFixture', english);
+          await overlay.save(
+            overlay.settings.copyWith(mode: ScreenTranslationMode.replace),
+          );
+          await waitFor(() async => overlay.visible);
+        }
         await overlay.save(overlay.settings.copyWith(allowCapture: false));
         await waitFor(() async => (await state())['excluded'] == true);
         expect((await styles.read()).allowCapture, isFalse);
@@ -499,5 +597,6 @@ void main() {
         await folder.delete(recursive: true);
       }
     },
+    timeout: Timeout(Duration(seconds: soakSeconds + 180)),
   );
 }
