@@ -50,6 +50,7 @@ class CaptionOverlay(tk.Toplevel):
         self.content_height = 0
         self.watch_area = None
         self.lines = {}
+        self.original = None
         self.status_message = "字幕预览"
         self.interruption = ""
 
@@ -65,7 +66,7 @@ class CaptionOverlay(tk.Toplevel):
         self.shades = [self.make_panel(self.surface, theme.CAPTION_BG) for _ in range(2)]
         size = appearance.caption_size
         self.caption_font = font.Font(root=self, family=theme.FONT, size=size)
-        self.previous_font = font.Font(root=self, family=theme.FONT, size=self.previous_size(size))
+        self.previous_font = font.Font(root=self, family=theme.FONT, size=theme.secondary_caption_size(size))
         stroke = max(1, round(self.scale))
         self.stroke_offsets = [(stroke, 2 * stroke), (-stroke, 0), (stroke, 0), (0, -stroke), (0, stroke), (0, 0)]
         self.previous_items = self.make_text("previous", theme.CAPTION_PREVIOUS, self.previous_font)
@@ -300,14 +301,10 @@ class CaptionOverlay(tk.Toplevel):
 
     def set_size(self, size):
         self.caption_font.configure(size=size)
-        self.previous_font.configure(size=self.previous_size(size))
+        self.previous_font.configure(size=theme.secondary_caption_size(size))
         self.sync_controls()
         self.shrink_ready = True
         self.schedule_watch()
-
-    @staticmethod
-    def previous_size(size):
-        return max(12, round(size * 0.72))
 
     def set_active(self, active):
         self.controls.set_active(active)
@@ -321,8 +318,9 @@ class CaptionOverlay(tk.Toplevel):
         self.reset("等待字幕…")
         self.reveal()
 
-    def reset(self, message):
+    def reset(self, message, *, original=None):
         self.status_message = message
+        self.original = original
         self.interruption = ""
         self.shrink_ready = True
         self.schedule_watch()
@@ -338,9 +336,10 @@ class CaptionOverlay(tk.Toplevel):
             del lines[next(iter(lines))]
         self.set_captions(lines)
 
-    def set_captions(self, lines):
-        if lines != self.lines:
+    def set_captions(self, lines, *, original=None):
+        if lines != self.lines or original != self.original:
             self.lines = lines
+            self.original = original
             self.schedule_watch()
 
     def schedule_watch(self):
@@ -359,7 +358,7 @@ class CaptionOverlay(tk.Toplevel):
             self.position = ((work.left + work.right) // 2, work.bottom - round(56 * self.scale))
         return work
 
-    def fit_rows(self, tag, text, text_font, width, max_rows):
+    def fit_rows(self, tag, text, text_font, width, max_rows, *, keep_tail=False):
         line = " ".join(text.splitlines())
         if not line or max_rows < 1:
             return ""
@@ -371,7 +370,7 @@ class CaptionOverlay(tk.Toplevel):
         line_height = text_font.metrics("linespace")
         count = round((bottom - top) / line_height)
         first_row = max(0, count - max_rows)
-        if first_row and tag == "previous":
+        if first_row and tag == "previous" and not keep_tail:
             return ""
         indices = [
             self.surface.index(layout, f"@{left - 1},{top + row * line_height + line_height // 2}")
@@ -430,13 +429,16 @@ class CaptionOverlay(tk.Toplevel):
         captions = list(self.lines.values())
         latest = captions[-1] if captions else self.status_message
         earlier = captions[-2] if len(captions) > 1 else ""
+        if self.original is not None:
+            earlier = self.original
         if self.interruption:
             latest, earlier = self.interruption, captions[-1] if captions else ""
         max_rows = max(1, min(4, available_height // spacing))
         current = self.fit_rows("current", latest, self.caption_font, text_limit, max_rows)
         text_height = (current.count("\n") + 1) * spacing
         previous = self.fit_rows("previous", earlier, self.previous_font, text_limit,
-                                 min(2, (available_height - text_height - self.gap) // previous_spacing))
+                                 min(2, (available_height - text_height - self.gap) // previous_spacing),
+                                 keep_tail=self.original is not None and not self.interruption)
         height = header + text_height + 2 * self.gap
         if previous:
             height += (previous.count("\n") + 1) * previous_spacing + self.gap

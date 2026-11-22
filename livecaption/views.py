@@ -18,6 +18,7 @@ APPEARANCE_TITLE = "字幕外观"
 SOURCE_HINT = "选择要加字幕的窗口"
 KEY_HINT = "请先填写百炼北京地域的 API Key。"
 CAPTION_SAMPLE = "沿着海岸，前面就是那片沙滩。"
+CAPTION_SAMPLE_ORIGINAL = "The beach is up the coast."
 PAGE_PADDING = (theme.GUTTER, 15, theme.GUTTER, 16)
 SECTION_GAP = (12, 0)
 SECTION_PADDING = (16, 13)
@@ -164,19 +165,28 @@ class CaptionPreview(tk.Canvas):
         self.scene = self.create_image(0, 0, image=self.photo)
         self.shade = self.create_rectangle(0, 0, 0, 0, fill=theme.CAPTION_BG, outline="")
         self.text_font = font.Font(root=self, family=theme.FONT, size=appearance.caption_size)
+        self.original_font = font.Font(root=self, family=theme.FONT,
+                                      size=theme.secondary_caption_size(appearance.caption_size))
         self.offsets = ((1, 2), (-1, 0), (1, 0), (0, -1), (0, 1), (0, 0))
-        self.caption = [
-            self.create_text(0, 0, text=CAPTION_SAMPLE, anchor="s", justify="center",
-                             font=self.text_font, fill=theme.CAPTION_STROKE if offset != (0, 0) else theme.CAPTION_TEXT,
-                             tags=("caption",))
+        self.caption = self.make_text(CAPTION_SAMPLE, self.text_font, theme.CAPTION_TEXT, "caption")
+        self.original = self.make_text(CAPTION_SAMPLE_ORIGINAL, self.original_font, theme.CAPTION_PREVIOUS, "original")
+        self.background_mode = appearance.background
+        self.bilingual = appearance.bilingual
+        self.bind("<Configure>", self.redraw)
+
+    def make_text(self, text, text_font, color, tag):
+        return [
+            self.create_text(0, 0, text=text, anchor="s", justify="center",
+                             font=text_font, fill=theme.CAPTION_STROKE if offset != (0, 0) else color,
+                             tags=(tag,))
             for offset in self.offsets
         ]
-        self.background_mode = appearance.background
-        self.bind("<Configure>", self.redraw)
 
     def show_appearance(self, appearance):
         self.text_font.configure(size=appearance.caption_size)
+        self.original_font.configure(size=theme.secondary_caption_size(appearance.caption_size))
         self.background_mode = appearance.background
+        self.bilingual = appearance.bilingual
         self.redraw()
 
     def redraw(self, _event=None):
@@ -186,12 +196,19 @@ class CaptionPreview(tk.Canvas):
         for item, (dx, dy) in zip(self.caption, self.offsets):
             self.coords(item, width / 2 + dx, height - 15 + dy)
         left, top, right, bottom = self.bbox(self.caption[-1])
+        self.itemconfigure("original", width=max(1, width - 34), state="normal" if self.bilingual else "hidden")
+        if self.bilingual:
+            for item, (dx, dy) in zip(self.original, self.offsets):
+                self.coords(item, width / 2 + dx, top - 4 + dy)
+            source_left, source_top, source_right, _ = self.bbox(self.original[-1])
+            left, top, right = min(left, source_left), source_top, max(right, source_right)
         self.coords(self.shade, left - 10, top - 3, right + 10, bottom + 3)
         self.itemconfigure(self.shade, state="normal" if self.background_mode == "shade" else "hidden")
 
 
 class CaptionPage(ttk.Frame):
-    def __init__(self, parent, appearance, scale, *, change_size, change_background, change_lock, show_overlay):
+    def __init__(self, parent, appearance, scale, *, change_size, change_background, change_lock,
+                 change_bilingual, show_overlay):
         super().__init__(parent, padding=PAGE_PADDING)
         self.columnconfigure((0, 1), weight=1, uniform="appearance")
         self.rowconfigure(1, weight=1)
@@ -211,11 +228,17 @@ class CaptionPage(ttk.Frame):
         self.size_choice.grid(row=3, column=0, sticky="ew", pady=(5, 0))
         self.background_choice = segmented_choices(self, self.background, BACKGROUNDS.items(), change_background)
         self.background_choice.grid(row=3, column=1, sticky="ew", padx=(12, 0), pady=(5, 0))
+        ttk.Label(self, text="字幕内容").grid(row=4, column=0, sticky="w", pady=(12, 0))
+        self.bilingual = tk.BooleanVar(master=self)
+        self.language_choice = segmented_choices(self, self.bilingual, ((False, "仅译文"), (True, "双语")),
+                                                 change_bilingual)
+        self.language_choice.grid(row=5, column=0, sticky="ew", pady=(5, 0))
         self.locked = tk.BooleanVar(master=self)
         ttk.Checkbutton(self, text="锁定浮窗位置", variable=self.locked,
-                        command=lambda: change_lock(self.locked.get())).grid(row=4, column=0, sticky="w", pady=(12, 0))
+                        command=lambda: change_lock(self.locked.get())).grid(
+            row=4, column=1, sticky="w", padx=(12, 0), pady=(12, 0))
         self.notice = ttk.Label(self, style="Hint.TLabel")
-        self.notice.grid(row=4, column=1, sticky="ew", padx=(12, 0), pady=(12, 0))
+        self.notice.grid(row=5, column=1, sticky="ew", padx=(12, 0), pady=(5, 0))
         wrap_label(self.notice)
         self.show_appearance(appearance)
 
@@ -223,7 +246,12 @@ class CaptionPage(ttk.Frame):
         self.size.set(appearance.caption_size)
         self.background.set(appearance.background)
         self.locked.set(appearance.locked)
+        self.bilingual.set(appearance.bilingual)
         self.preview.show_appearance(appearance)
+
+    def set_active(self, active):
+        for button in self.language_choice.winfo_children():
+            button.state(["disabled"] if active else ["!disabled"])
 
 
 class SettingsPage(ttk.Frame):

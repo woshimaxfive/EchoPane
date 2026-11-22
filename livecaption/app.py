@@ -17,7 +17,10 @@ from session import LiveSession, Phase
 from transcripts import TranscriptArchive, export_transcript
 from usage import UsageHistory
 from usage_view import UsagePage
-from views import APPEARANCE_TITLE, CAPTION_SAMPLE, KEY_HINT, LIVE_TITLE, CaptionPage, LivePage, SessionBar, SettingsPage
+from views import (
+    APPEARANCE_TITLE, CAPTION_SAMPLE, CAPTION_SAMPLE_ORIGINAL, KEY_HINT, LIVE_TITLE,
+    CaptionPage, LivePage, SessionBar, SettingsPage,
+)
 from window_frame import WindowFrame
 
 
@@ -58,7 +61,7 @@ class LiveCaptions:
         self.caption = CaptionPage(
             self.tabs, self.appearance, scale,
             change_size=self.set_caption_size, change_background=self.set_caption_background,
-            change_lock=self.set_caption_lock, show_overlay=self.show_overlay,
+            change_lock=self.set_caption_lock, change_bilingual=self.set_caption_bilingual, show_overlay=self.show_overlay,
         )
         self.usage_page = UsagePage(self.tabs, usage_history, self.session.current_usage, scale,
                                     open_live=lambda: self.tabs.select(self.live),
@@ -126,6 +129,7 @@ class LiveCaptions:
         if state.active != self.rendered_active:
             self.live.set_active(state.active)
             self.settings.set_active(state.active)
+            self.caption.set_active(state.active)
             self.overlay.set_active(state.active)
             self.rendered_active = state.active
         if state.phase is Phase.STOPPING and self.rendered_phase is not Phase.STOPPING:
@@ -182,7 +186,7 @@ class LiveCaptions:
 
         self.tabs.select(self.live)
         self.validation_message = ""
-        self.session.start(process, key, workspace)
+        self.session.start(process, key, workspace, bilingual=self.appearance.bilingual)
         if self.running:
             self.save_on_finish = False
             self.archive_notice = ""
@@ -220,9 +224,9 @@ class LiveCaptions:
         usage_finished = False
         for kind, data in self.session.poll():
             if kind == "caption":
-                self.overlay.set_captions(self.session.recent_captions())
+                self.overlay.set_captions(self.session.recent_captions(), original=self.session.latest_original())
                 if self.history_open() and self.history.archive_id is None:
-                    self.history.update_line(data.ident, data.text)
+                    self.history.update_line(data.ident, self.session.caption_text(data.ident))
             elif kind == "usage":
                 usage_changed = True
             else:
@@ -345,7 +349,8 @@ class LiveCaptions:
 
     def show_overlay(self):
         if not self.running and not self.overlay.lines and not self.overlay.interruption:
-            self.overlay.reset(CAPTION_SAMPLE)
+            original = CAPTION_SAMPLE_ORIGINAL if self.appearance.bilingual else None
+            self.overlay.reset(CAPTION_SAMPLE, original=original)
         self.overlay.reveal()
 
     def dismiss_overlay(self):
@@ -364,6 +369,12 @@ class LiveCaptions:
     def set_caption_background(self, background):
         self.overlay.set_background(background)
         self.update_appearance(background=background)
+
+    def set_caption_bilingual(self, bilingual):
+        if not self.running:
+            self.update_appearance(bilingual=bilingual)
+            if self.overlay.winfo_viewable() and not self.overlay.lines and not self.overlay.interruption:
+                self.show_overlay()
 
     def set_caption_lock(self, locked):
         self.overlay.set_locked(locked)

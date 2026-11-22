@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
-from cloud import LIVE_MODEL, ContentInspectionFailed, subtitles
+from cloud import LIVE_MODEL, CaptionUpdate, ContentInspectionFailed, subtitles
 from transcripts import Transcript
 from usage import UsageRecord
 
@@ -46,6 +46,35 @@ class TranscriptCaption:
     first_shown: float
 
 
+class OriginalCaptions:
+    """Track source text by the IDs supplied in the live service events."""
+
+    def __init__(self):
+        self.sources = {}
+        self.translations = {}
+        self.originals = {}
+
+    def link(self, translation, original):
+        if translation in self.sources:
+            return ()
+        self.sources[translation] = original
+        self.translations.setdefault(original, []).append(translation)
+        return (translation,) if self.text(translation) else ()
+
+    def update(self, original):
+        previous = self.originals.get(original.ident)
+        if previous and previous.final and not original.final:
+            return ()
+        self.originals[original.ident] = original
+        if original.text == (previous.text if previous else ""):
+            return ()
+        return self.translations.get(original.ident, ())
+
+    def text(self, translation):
+        original = self.originals.get(self.sources.get(translation))
+        return original.text if original else ""
+
+
 class LiveSession:
     def __init__(self, usage_history=None):
         self.events = queue.SimpleQueue()
@@ -57,8 +86,10 @@ class LiveSession:
         self.usage_save_failed = False
         self.finished_at = None
         self.captions = {}
+        self.bilingual = False
+        self.originals = OriginalCaptions()
 
-    def start(self, process, key, workspace):
+    def start(self, process, key, workspace, *, bilingual=False):
         if self.state.active:
             return
         record = UsageRecord(uuid4().hex, time.time(), LIVE_MODEL)
@@ -67,7 +98,8 @@ class LiveSession:
         self.state = SessionState(Phase.CONNECTING, "正在连接百炼…")
         worker = threading.Thread(
             target=self.run, args=(process, key, workspace, self.stop_flag, self.emit),
-            kwargs={"usage_history": self.usage_history, "usage_start": usage_start}, daemon=True,
+            kwargs={"usage_history": self.usage_history, "usage_start": usage_start,
+                    "bilingual": bilingual}, daemon=True,
         )
         try:
             worker.start()
@@ -79,6 +111,8 @@ class LiveSession:
             self.usage_start = usage_start
             self.finished_at = None
             self.captions.clear()
+            self.bilingual = bilingual
+            self.originals = OriginalCaptions()
 
     def emit(self, kind, data):
         self.events.put((kind, data))
@@ -94,11 +128,16 @@ class LiveSession:
             self.state = SessionState()
 
     def transcript(self):
-        return {ident: update.text for ident, update in self.captions.items()}
+        return {ident: self.caption_text(ident) for ident in self.captions}
+
+    def caption_text(self, ident):
+        caption = self.captions[ident].text
+        original = self.originals.text(ident)
+        return f"{original}\n{caption}" if original else caption
 
     def transcript_snapshot(self):
         record = self.transcript_record
-        captions = tuple((caption.first_shown, caption.text) for caption in self.captions.values()
+        captions = tuple((caption.first_shown, self.caption_text(ident)) for ident, caption in self.captions.items()
                          if caption.text.strip())
         if record is not None and captions:
             return Transcript(record.ident, record.started_at, self.elapsed(), captions)
@@ -106,6 +145,10 @@ class LiveSession:
     def recent_captions(self):
         recent = list(islice(reversed(self.captions.items()), 2))
         return {ident: caption.text for ident, caption in reversed(recent)}
+
+    def latest_original(self):
+        if self.bilingual:
+            return self.originals.text(next(reversed(self.captions), None))
 
     @property
     def transcript_record(self):
@@ -160,6 +203,11 @@ class LiveSession:
                 first_shown = previous.first_shown if previous else self.elapsed()
                 self.captions[data.ident] = TranscriptCaption(data.text, data.final, first_shown)
                 yield kind, data
+            elif self.bilingual and kind in ("caption_link", "original"):
+                changes = self.originals.link(*data) if kind == "caption_link" else self.originals.update(data)
+                for ident in changes:
+                    if (caption := self.captions.get(ident)) is not None:
+                        yield "caption", CaptionUpdate(ident, caption.text, caption.final)
             elif kind == "usage":
                 if self.usage != data:
                     self.usage = data
@@ -178,7 +226,7 @@ class LiveSession:
                 yield kind, data
 
     @staticmethod
-    def run(process, key, workspace, stop, emit, *, usage_history=None, usage_start=None):
+    def run(process, key, workspace, stop, emit, *, usage_history=None, usage_start=None, bilingual=False):
         end_event = "end"
         error = ""
         latest_usage = None
@@ -194,7 +242,7 @@ class LiveSession:
             emit(kind, data)
 
         try:
-            asyncio.run(subtitles(process, key, workspace, stop, forward))
+            asyncio.run(subtitles(process, key, workspace, stop, forward, bilingual=bilingual))
         except ContentInspectionFailed:
             end_event = "content_blocked"
             error = "百炼内容审核中断，字幕已停止。请等当前片段结束或切换音源后重新开始。"

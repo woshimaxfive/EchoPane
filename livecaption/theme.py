@@ -86,6 +86,10 @@ def asset_path(name):
     return app_dir / "assets" / name
 
 
+def secondary_caption_size(size):
+    return max(12, round(size * 0.72))
+
+
 def glyph(root, name, color, *, min_height=0):
     scale = max(1.0, float(root.tk.call("tk", "scaling")) * 0.75)
     size = round(16 * scale)

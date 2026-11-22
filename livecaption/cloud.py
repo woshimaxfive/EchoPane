@@ -51,7 +51,7 @@ async def expect(ws, kind):
                 return
 
 
-async def subtitles(process, key, workspace, stop, emit):
+async def subtitles(process, key, workspace, stop, emit, *, bilingual=False):
     ready = False
 
     async def run_session():
@@ -64,13 +64,13 @@ async def subtitles(process, key, workspace, stop, emit):
             await ws.send(json.dumps({"type": "session.update", "session": {
                 "modalities": ["text"], "translation": {"language": "zh"},
                 "input_audio_format": "pcm", "sample_rate": 16000,
-                "input_audio_transcription": {"model": None},
+                "input_audio_transcription": {"model": "qwen3-asr-flash-realtime" if bilingual else None},
             }}))
             await expect(ws, "session.updated")
             if stop.is_set():
                 return
             ready = True
-            await stream(ws, process, stop, emit)
+            await stream(ws, process, stop, emit, bilingual=bilingual)
 
     if stop.is_set():
         return
@@ -89,7 +89,35 @@ async def subtitles(process, key, workspace, stop, emit):
             await asyncio.gather(connection, return_exceptions=True)
 
 
-async def stream(ws, process, stop, emit):
+def emit_caption(event, emit, *, bilingual=False):
+    kind = event.get("type")
+    if kind in ("response.text.text", "response.text.done"):
+        # Keep the confirmed prefix. The stash can be rewritten by the server.
+        ident = event.get("item_id") or event.get("response_id")
+        text = (event.get("text") or "").strip()
+        if ident and text:
+            emit("caption", CaptionUpdate(ident, text, kind == "response.text.done"))
+    elif bilingual and kind == "conversation.item.created":
+        item = event.get("item") or {}
+        previous = event.get("previous_item_id")
+        if item.get("role") == "assistant" and item.get("id") and previous:
+            emit("caption_link", (item["id"], previous))
+    elif bilingual and kind in (
+        "conversation.item.input_audio_transcription.text",
+        "conversation.item.input_audio_transcription.completed",
+        "conversation.item.input_audio_transcription.failed",
+    ):
+        ident = event.get("item_id")
+        final = not kind.endswith(".text")
+        if kind.endswith(".failed"):
+            text = ""
+        else:
+            text = (event.get("transcript" if final else "text") or "").strip()
+        if ident and (text or final):
+            emit("original", CaptionUpdate(ident, text, final))
+
+
+async def stream(ws, process, stop, emit, *, bilingual=False):
     async def send_audio():
         with AudioSource(process) as source:
             emit("status", "正在采音，译文显示在字幕窗。")
@@ -132,13 +160,7 @@ async def stream(ws, process, stop, emit):
             event = json.loads(message)
             check_event(event)
             kind = event.get("type")
-            if kind in ("response.text.text", "response.text.done"):
-                # Display the confirmed portion and retain the final event for this item.
-                ident = event.get("item_id") or event.get("response_id")
-                text = event.get("text", "").strip()
-                if ident and text:
-                    emit("caption", CaptionUpdate(ident, text, kind == "response.text.done"))
-            elif kind == "response.done":
+            if kind == "response.done":
                 response = event.get("response") or {}
                 usage = response.get("usage") or {}
                 audio = (usage.get("input_tokens_details") or {}).get("audio_tokens")
@@ -149,6 +171,8 @@ async def stream(ws, process, stop, emit):
                     raise RuntimeError("本次翻译未完整返回，请重新开始。")
             elif kind == "session.finished":
                 return
+            else:
+                emit_caption(event, emit, bilingual=bilingual)
         raise RuntimeError("翻译连接已经关闭。")
 
     sender = asyncio.create_task(send_audio())

@@ -12,11 +12,13 @@
 
 在「字幕外观」页可以预览字号、透明或窄暗底，并锁定浮窗位置。浮窗默认显示带细描边的字幕，单句超出屏幕可用宽度时换行。浮窗按内容扩展，字幕变短时稍停再收拢。鼠标移到文字上时出现半透明操作区，文字保持原有对比度，可以按住字幕或空白处拖动。操作区有字号、背景、锁定、停止和关闭控件。移开鼠标后恢复观看状态。背景、字号、位置和锁定状态会自动保存。
 
+想同时看原文和译文时，在开始前选择「字幕外观 → 字幕内容 → 双语」。译文一到就显示，对应原文确认后出现在上方。回看、保存和导出都会带上已收到的原文。字幕内容选项会自动保存，新安装默认选择「仅译文」。
+
 在「实时字幕」点「字幕回看」，独立窗口会定位到过去 30 秒内最早显示的字幕，长时间没出字幕时定位到最后一条。回看时，浮窗继续更新，列表停在阅读位置。点「回到最新」恢复跟随，点「刚才 30 秒」再次定位。翻译中断时可按提示重新开始。
 
 想留住一场字幕时，点回看窗口里的「保存本场」。翻译结束时会补存这一场后续收到的译文。重新打开 EchoPane 后，可以从回看窗口上方按时间选场次，也能从「用量」页选中有可用字幕的会话，点「回看这场」。未手动保存的译文保留到下一场开始或软件退出。点击「导出…」可以把正在回看的字幕另存为 TXT 或 SRT。SRT 以本场开始为零点，时间码依据每条译文首次显示的时间。
 
-保存的会话字幕位于 `%LOCALAPPDATA%\EchoPane\captions.sqlite3`。数据库包含译文、会话开始时间、时长和各句出现时间。
+保存的会话字幕位于 `%LOCALAPPDATA%\EchoPane\captions.sqlite3`。数据库包含字幕文本、会话开始时间、时长和各句出现时间。
 
 在「用量」页按今天、近 7 天或近 30 天查看会话数、音频输入 Token、文本输出 Token 和估算费用。点击上方指标切换趋势，鼠标移到图表上查看对应时段的数值。趋势和明细按会话开始时间统计。翻译期间显示服务最新返回的累计用量，结束或中断后写入本机记录。服务未返回用量时，明细以「—」显示。费用按北京地域公开单价估算，实际金额以百炼账单为准。 [百炼模型价格](https://help.aliyun.com/zh/model-studio/model-pricing)
 
@@ -54,7 +56,7 @@ if (!(Test-Path -LiteralPath $soxrSource)) {
     Invoke-WebRequest -Uri 'https://files.pythonhosted.org/packages/ed/11/27cebce4a108f77afea7c80545115536b45e3f11ebfb914f638fdd9ba847/soxr-1.1.0.tar.gz' -OutFile $soxrSource
 }
 & $buildPython -B livecaption/build_windows.py bdist_msi
-Get-FileHash -Algorithm SHA256 .local/windows-package/EchoPane-0.2.14-win-x64.msi
+Get-FileHash -Algorithm SHA256 .local/windows-package/EchoPane-0.2.15-win-x64.msi
 ```
 
 生成的 x64 MSI 位于 `.local/windows-package/`。双击安装后，可从开始菜单打开 EchoPane。同一 Windows 用户下升级时，会沿用该用户的字幕外观与已保存的百炼凭据。

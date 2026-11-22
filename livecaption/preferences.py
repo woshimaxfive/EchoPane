@@ -18,6 +18,7 @@ class CaptionAppearance:
     background: str = "transparent"
     position: tuple[int, int] | None = None
     locked: bool = False
+    bilingual: bool = False
 
 
 def appearance_path():
@@ -41,7 +42,8 @@ def load_appearance():
         size = DEFAULT_CAPTION_SIZE
     if not isinstance(background, str) or background not in BACKGROUNDS:
         background = "transparent"
-    return CaptionAppearance(size, background, load_position(data), data.get("locked") is True)
+    return CaptionAppearance(size, background, load_position(data), data.get("locked") is True,
+                             data.get("bilingual") is True)
 
 
 def load_position(data):

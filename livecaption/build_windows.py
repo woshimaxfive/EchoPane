@@ -14,7 +14,7 @@ from freeze_core.winmsvcr import MSVC_FILES
 SOURCE = Path(__file__).resolve().parent
 LOCAL = SOURCE.parent / ".local"
 BUILD_DIR = LOCAL / "windows-build"
-VERSION = "0.2.14"
+VERSION = "0.2.15"
 SOXR_SOURCE = BUILD_DIR / "sources" / "soxr-1.1.0.tar.gz"
 SOXR_SOURCE_SHA256 = "9f228ae21c78fa9359ca98d8a5e8e91f30639e438e574133dace62c5b5309e44"
 VC_RUNTIME_FILES = (
