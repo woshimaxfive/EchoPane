@@ -1,39 +1,9 @@
-# Local files
+# 本机构建、测试与计划文件
 /.local/
-/.idea/
-/.vscode/
-/.agents/
-/.codex/
-*.log
-*.tmp
-*.bak
-Thumbs.db
-Desktop.ini
-.DS_Store
-*.iml
-
-# Credentials
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-
-# Generated files
-/build/
-/dist/
-/coverage/
-/node_modules/
+/.planning/
+/task_plan.md
+/findings.md
+/progress.md
+/AGENTS.md
 __pycache__/
-*.pyc
-
-# Local models and caches
-/models/
-/.cache/
-
-# Flutter generated files
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
-**/flutter/ephemeral/
+*.py[cod]
