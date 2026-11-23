@@ -13,6 +13,7 @@ from history import CaptionHistory
 from native_windows import monitor_work_area
 from overlay import CaptionOverlay
 from preferences import CAPTION_SIZES, load_appearance, load_sidebar_collapsed, save_appearance, save_sidebar_collapsed
+from screen_view import ScreenPage
 from session import LiveSession, Phase
 from transcripts import TranscriptArchive, export_transcript
 from usage import UsageHistory
@@ -21,7 +22,7 @@ from views import (
     APPEARANCE_TITLE, CAPTION_SAMPLE, CAPTION_SAMPLE_ORIGINAL, KEY_HINT, LIVE_TITLE,
     CaptionPage, LivePage, SessionBar, SettingsPage,
 )
-from window_frame import WindowFrame
+from window_frame import WindowFrame, set_window_transitions
 
 
 DEFAULT_WINDOW_SIZE = (820, 560)
@@ -67,8 +68,13 @@ class LiveCaptions:
                                     open_live=lambda: self.tabs.select(self.live),
                                     can_recall=self.can_recall, open_history=self.open_history)
         self.settings = SettingsPage(self.tabs, self.input_changed)
+        self.screen_page = ScreenPage(
+            self.tabs, hide_windows=self.hide_capture_windows, configuration=self.settings.configuration,
+            configure_service=lambda: self.show_input_page(self.settings, self.settings.key_entry),
+        )
         for page, title, icon in (
             (self.live, LIVE_TITLE, "live"), (self.caption, APPEARANCE_TITLE, "captions"),
+            (self.screen_page, "屏幕翻译", "screen"),
             (self.usage_page, "用量", "usage"), (self.settings, "设置", "settings"),
         ):
             self.tabs.add_page(page, title, icon)
@@ -107,6 +113,25 @@ class LiveCaptions:
             self.root.geometry(self.default_geometry)
         else:
             theme.color_title_bar(self.root)
+
+    def hide_capture_windows(self):
+        windows = [self.root]
+        if self.history_open():
+            windows.append(self.history)
+        visible = [(window, window.state()) for window in windows if window.winfo_ismapped()]
+        self.overlay.suspend_for_capture()
+        for window, _state in reversed(visible):
+            set_window_transitions(window, disabled=True)
+            window.withdraw()
+
+        def restore():
+            for window, state in visible:
+                if window.winfo_exists():
+                    window.state(state)
+                    set_window_transitions(window, disabled=False)
+            self.overlay.resume_after_capture()
+
+        return restore
 
     @property
     def running(self):

@@ -14,6 +14,7 @@ SWP_NOMOVE = 0x0002
 SWP_FRAMECHANGED = 0x0020
 DWMWA_BORDER_COLOR = 34
 DWMWA_COLOR_NONE = 0xFFFFFFFE
+DWMWA_TRANSITIONS_FORCEDISABLED = 3
 
 SubclassProc = ctypes.WINFUNCTYPE(
     ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, ctypes.c_size_t,
@@ -35,6 +36,12 @@ USER32.IsZoomed.restype = wintypes.BOOL
 DWMAPI = ctypes.WinDLL("dwmapi")
 DWMAPI.DwmSetWindowAttribute.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
 DWMAPI.DwmSetWindowAttribute.restype = wintypes.LONG
+
+
+def set_window_transitions(window, *, disabled):
+    flag = wintypes.BOOL(disabled)
+    DWMAPI.DwmSetWindowAttribute(int(window.wm_frame(), 0), DWMWA_TRANSITIONS_FORCEDISABLED,
+                                 ctypes.byref(flag), ctypes.sizeof(flag))
 
 
 class WindowFrame:

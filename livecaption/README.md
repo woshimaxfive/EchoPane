@@ -32,6 +32,12 @@
 
 字幕示例照片由美国国家公园管理局拍摄，来自公有领域档案。 [照片来源](https://npgallery.nps.gov/AssetDetail/f1a8781f-9110-4676-81b0-3f88b658b8ca)
 
+## 屏幕翻译
+
+在「屏幕翻译」点击「框选屏幕」，拖动鼠标圈住文字，按 Esc 或右键取消。截图在内存中通过安装包自带的 RapidOCR 模型识别。识别后可以编辑原文。
+
+点击「翻译」后，EchoPane 用设置页的 Key 和业务空间向阿里云百炼 Qwen-MT 发送确认过的文字。译文为简体中文，可以选中或点击「复制」。截图留在本机内存，软件退出后清空本页文本。文本翻译用量可在百炼账单中查看，EchoPane 的「用量」页统计实时字幕会话。 [百炼 Qwen-MT 接口](https://help.aliyun.com/zh/model-studio/qwen-mt-api)
+
 ## 从源码运行
 
 双击 `start.cmd`。需要 Python 3.12 x64（含 Tk），首次启动会在仓库的 `.local` 目录安装依赖。若提供了 `DASHSCOPE_API_KEY`，启动时使用该环境变量和对应的 `DASHSCOPE_WORKSPACE`。
@@ -42,9 +48,11 @@
 
 增加功能时可在独立页面中实现，复用主题，再把页面注册到主窗的左侧导航。各项功能可以在独立页面维护自身状态。
 
+`screen_view.py` 管理屏幕翻译页面，`screen_capture.py` 负责 Windows 框选和截图，`screen_ocr.py` 调用本机模型，`text_translation.py` 发送确认后的文本。
+
 ## 构建 Windows 安装包
 
-在仓库根目录使用带 Tk 的 Python 3.14.10 x64 创建构建环境。安装包会在第三方许可目录内附带 SoXR 的对应源码，构建时校验该源码包的 SHA-256。
+在仓库根目录使用带 Tk 的 Python 3.14.10 x64 创建构建环境。构建时会校验 SoXR 与 GEOS 对应源码包以及 RapidOCR 模型的 SHA-256，并将它们放入安装包。
 
 ```powershell
 py -3.14 -m venv .local/release-build
@@ -55,10 +63,14 @@ $soxrSource = '.local/windows-build/sources/soxr-1.1.0.tar.gz'
 if (!(Test-Path -LiteralPath $soxrSource)) {
     Invoke-WebRequest -Uri 'https://files.pythonhosted.org/packages/ed/11/27cebce4a108f77afea7c80545115536b45e3f11ebfb914f638fdd9ba847/soxr-1.1.0.tar.gz' -OutFile $soxrSource
 }
+$geosSource = '.local/windows-build/sources/geos-3.14.1.tar.bz2'
+if (!(Test-Path -LiteralPath $geosSource)) {
+    Invoke-WebRequest -Uri 'https://download.osgeo.org/geos/geos-3.14.1.tar.bz2' -OutFile $geosSource
+}
 & $buildPython -B livecaption/build_windows.py bdist_msi
-Get-FileHash -Algorithm SHA256 .local/windows-package/EchoPane-0.2.15-win-x64.msi
+Get-FileHash -Algorithm SHA256 .local/windows-package/EchoPane-0.2.16-win-x64.msi
 ```
 
 生成的 x64 MSI 位于 `.local/windows-package/`。双击安装后，可从开始菜单打开 EchoPane。同一 Windows 用户下升级时，会沿用该用户的字幕外观与已保存的百炼凭据。
 
-该安装包使用系统中的 Microsoft Visual C++ x64 运行库，安装时会检查所需文件。 [依赖许可与 SoXR 对应源码](../THIRD_PARTY_NOTICES.md)
+该安装包使用系统中的 Microsoft Visual C++ x64 运行库，安装时会检查所需文件。 [依赖许可与对应源码](../THIRD_PARTY_NOTICES.md)

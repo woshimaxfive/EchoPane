@@ -10,15 +10,20 @@ from cx_Freeze import Executable, setup
 from cx_Freeze.command.build_exe import build_exe
 from freeze_core.winmsvcr import MSVC_FILES
 
+from screen_ocr import MODEL_HASHES
+
 
 SOURCE = Path(__file__).resolve().parent
 LOCAL = SOURCE.parent / ".local"
 BUILD_DIR = LOCAL / "windows-build"
-VERSION = "0.2.15"
-SOXR_SOURCE = BUILD_DIR / "sources" / "soxr-1.1.0.tar.gz"
-SOXR_SOURCE_SHA256 = "9f228ae21c78fa9359ca98d8a5e8e91f30639e438e574133dace62c5b5309e44"
+VERSION = "0.2.16"
+LIBRARY_SOURCES = (
+    ("soxr", "soxr-1.1.0.tar.gz", "9f228ae21c78fa9359ca98d8a5e8e91f30639e438e574133dace62c5b5309e44"),
+    ("shapely", "geos-3.14.1.tar.bz2", "3c20919cda9a505db07b5216baa980bacdaa0702da715b43f176fb07eff7e716"),
+)
 VC_RUNTIME_FILES = (
     ("ECHOPANE_MSVC_CPP", "msvcp140.dll"),
+    ("ECHOPANE_MSVC_CPP_AUX", "msvcp140_1.dll"),
     ("ECHOPANE_MSVC_CORE", "vcruntime140.dll"),
     ("ECHOPANE_MSVC_SUPPORT", "vcruntime140_1.dll"),
 )
@@ -28,32 +33,43 @@ class BuildWithSystemRuntime(build_exe):
     def run(self):
         super().run()
         payload = Path(self.build_exe)
-        numpy_dir = payload / "lib/numpy"
-        # The pinned PyPI wheel uses a private name for its copy of MSVCP140.
-        vendor_runtime, = (payload / "lib/numpy.libs").glob("msvcp140-*.dll")
-        for pattern in ("_core/_multiarray_umath*.pyd", "fft/_pocketfft_umath*.pyd"):
-            extension, = numpy_dir.glob(pattern)
-            binary = lief.PE.parse(str(extension))
-            dependency = binary.get_import(vendor_runtime.name)
-            if dependency is None or binary.get_import("msvcp140.dll") or binary.has_signatures:
-                raise RuntimeError(f"NumPy 扩展的运行库引用与预期不符：{extension.name}")
-            dependency.name = "msvcp140.dll"
-            options = lief.PE.Builder.config_t()
-            options.imports = True
-            updated = extension.with_suffix(".pyd.tmp")
-            try:
-                binary.write(str(updated), options)
-                rewritten = lief.PE.parse(str(updated))
-                if not rewritten.get_import("msvcp140.dll") or rewritten.get_import(vendor_runtime.name):
-                    raise RuntimeError(f"未能更新 NumPy 扩展的运行库引用：{extension.name}")
-                updated.replace(extension)
-            finally:
-                updated.unlink(missing_ok=True)
-        vendor_runtime.unlink()
+        # Use the system runtime for the wheels that carry renamed copies of MSVCP140.
+        for package, patterns in (
+            ("numpy", ("lib/numpy/_core/_multiarray_umath*.pyd", "lib/numpy/fft/_pocketfft_umath*.pyd")),
+            ("shapely", ("lib/shapely.libs/geos-*.dll", "lib/shapely.libs/geos_c-*.dll")),
+        ):
+            vendor_runtime, = (payload / "lib" / f"{package}.libs").glob("msvcp140-*.dll")
+            for pattern in patterns:
+                extension, = payload.glob(pattern)
+                use_system_msvc(extension, vendor_runtime.name)
+            vendor_runtime.unlink()
+
+        # OCR processes still images. The OpenCV video plug-in is not part of this payload.
+        for plugin in payload.rglob("opencv_videoio_ffmpeg*.dll"):
+            plugin.unlink()
         unexpected = [file.name for file in payload.rglob("*.dll")
                       if file.name.lower() in MSVC_FILES or file.name.lower().startswith(("msvcp140-", "vcruntime140-"))]
         if unexpected:
             raise RuntimeError(f"安装包中仍有 Microsoft Visual C++ 运行库：{', '.join(unexpected)}")
+
+
+def use_system_msvc(file, vendor_name):
+    binary = lief.PE.parse(str(file))
+    dependency = binary.get_import(vendor_name)
+    if dependency is None or binary.get_import("msvcp140.dll") or binary.has_signatures:
+        raise RuntimeError(f"运行库引用与预期不符：{file.name}")
+    dependency.name = "msvcp140.dll"
+    options = lief.PE.Builder.config_t()
+    options.imports = True
+    updated = file.with_suffix(".tmp")
+    try:
+        binary.write(str(updated), options)
+        rewritten = lief.PE.parse(str(updated))
+        if not rewritten.get_import("msvcp140.dll") or rewritten.get_import(vendor_name):
+            raise RuntimeError(f"未能更新运行库引用：{file.name}")
+        updated.replace(file)
+    finally:
+        updated.unlink(missing_ok=True)
 
 
 def runtime_installer_checks():
@@ -76,8 +92,6 @@ def runtime_installer_checks():
 
 
 def license_files():
-    if not SOXR_SOURCE.is_file() or sha256(SOXR_SOURCE.read_bytes()).hexdigest() != SOXR_SOURCE_SHA256:
-        raise RuntimeError(f"缺少已校验的 SoXR 对应源码。请按 livecaption/README.md 下载到 {SOXR_SOURCE}")
     requirements = (SOURCE / "requirements.txt").read_text(encoding="utf-8")
     packages = [line.partition("==")[0] for line in requirements.splitlines() if line]
     files = [
@@ -85,8 +99,12 @@ def license_files():
         (SOURCE.parent / "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
         (Path(sys.base_prefix) / "LICENSE.txt", "licenses/Python/LICENSE.txt"),
         (SOURCE / "licenses", "licenses/runtime"),
-        (SOXR_SOURCE, Path("licenses", "soxr", "source", SOXR_SOURCE.name)),
     ]
+    for library, name, digest in LIBRARY_SOURCES:
+        source = BUILD_DIR / "sources" / name
+        if not source.is_file() or sha256(source.read_bytes()).hexdigest() != digest:
+            raise RuntimeError(f"缺少已校验的 {library} 对应源码。请按 livecaption/README.md 下载到 {source}")
+        files.append((source, Path("licenses", library, "source", name)))
     for name in (*packages, "cx-Freeze", "freeze-core"):
         package = distribution(name)
         for record in package.files or ():
@@ -95,6 +113,27 @@ def license_files():
                 ("license", "copying", "notice")
             ):
                 files.append((package.locate_file(record), Path("licenses", name, *parts)))
+    for name, module, notices in (
+        ("onnxruntime", "onnxruntime", ("LICENSE", "ThirdPartyNotices.txt")),
+        ("opencv-python-headless", "cv2", ("LICENSE.txt", "LICENSE-3RD-PARTY.txt")),
+    ):
+        for filename in notices:
+            files.append((distribution(name).locate_file(Path(module, filename)), Path("licenses", name, filename)))
+    return files
+
+
+def ocr_files():
+    package = distribution("rapidocr")
+    resources = ["config.yaml", "default_models.yaml", *(f"models/{name}" for name in MODEL_HASHES)]
+    files = []
+    for resource in resources:
+        source = package.locate_file(Path("rapidocr", resource))
+        if digest := MODEL_HASHES.get(Path(resource).name):
+            if not source.is_file() or sha256(source.read_bytes()).hexdigest() != digest:
+                raise RuntimeError(f"RapidOCR 模型校验失败：{source}")
+        files.append((source, Path("lib/rapidocr", resource)))
+    shapely_libs = distribution("shapely").locate_file("shapely.libs")
+    files.append((shapely_libs, "lib/shapely.libs"))
     return files
 
 
@@ -103,7 +142,7 @@ BUILD_DIR.mkdir(parents=True, exist_ok=True)
 setup(
     name="EchoPane",
     version=VERSION,
-    description="EchoPane live captions",
+    description="EchoPane captions and screen translation",
     author="EchoPane",
     cmdclass={"build_exe": BuildWithSystemRuntime},
     executables=[Executable(
@@ -115,11 +154,14 @@ setup(
         shortcut_dir="ProgramMenuFolder",
     )],
     options={
-        "build": {"build_base": str(BUILD_DIR / "build")},
+        "build": {"build_base": str(BUILD_DIR / "build" / VERSION)},
         "egg_info": {"egg_base": str(BUILD_DIR)},
         "build_exe": {
             "include_msvcr": False,
-            "include_files": [(SOURCE / "README.md", "README.md"), (SOURCE / "assets", "assets"), *license_files()],
+            "includes": ["rapidocr.inference_engine.onnxruntime.main"],
+            "include_files": [
+                (SOURCE / "README.md", "README.md"), (SOURCE / "assets", "assets"), *license_files(), *ocr_files(),
+            ],
             "replace_paths": [("*", ".")],
         },
         "bdist_msi": {

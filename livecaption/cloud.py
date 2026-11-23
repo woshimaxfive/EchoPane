@@ -24,13 +24,17 @@ class CaptionUpdate(NamedTuple):
     final: bool
 
 
-def service_url(workspace):
+def service_host(workspace):
     host = "dashscope.aliyuncs.com"
     if workspace:
         if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", workspace.lower()):
             raise ValueError("百炼业务空间 ID 格式有误。")
         host = workspace + ".cn-beijing.maas.aliyuncs.com"
-    return f"wss://{host}/api-ws/v1/realtime?model={LIVE_MODEL}"
+    return host
+
+
+def service_url(workspace):
+    return f"wss://{service_host(workspace)}/api-ws/v1/realtime?model={LIVE_MODEL}"
 
 
 def check_event(event):

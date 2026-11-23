@@ -12,17 +12,28 @@ EchoPane 源码采用 [MIT 许可证](LICENSE)。安装目录的 `licenses/` 包
 | [psutil 7.2.2](https://pypi.org/project/psutil/7.2.2/) | BSD-3-Clause | `licenses/psutil/` |
 | [Python-SoXR 1.1.0](https://pypi.org/project/soxr/1.1.0/) | LGPL-2.1-or-later，附有 libsoxr 和 PFFFT 的声明 | `licenses/soxr/` |
 | [websockets 16.1.1](https://pypi.org/project/websockets/16.1.1/) | BSD-3-Clause | `licenses/websockets/` |
+| [RapidOCR 3.10.0](https://pypi.org/project/rapidocr/3.10.0/) 及随附 PaddleOCR PP-OCRv6 模型 | Apache-2.0，模型出处与哈希在 `MODEL_LICENSES.md` | `licenses/rapidocr/` |
+| [ONNX Runtime 1.32.0](https://pypi.org/project/onnxruntime/1.32.0/) | MIT 及随附组件声明 | `licenses/onnxruntime/` |
+| [OpenCV Python Headless 5.1.0.95](https://pypi.org/project/opencv-python-headless/5.1.0.95/) | MIT（Python 打包脚本）、Apache-2.0（OpenCV）及随附组件声明 | `licenses/opencv-python-headless/` |
+| [Shapely 2.2.0](https://pypi.org/project/shapely/2.2.0/) 及 [GEOS 3.14.1](https://libgeos.org/usage/download/) | BSD-3-Clause（Shapely）、LGPL-2.1（GEOS）及随附组件声明 | `licenses/shapely/` |
+| [Pillow 13.0.0](https://pypi.org/project/pillow/13.0.0/) | HPND 及随附组件声明 | `licenses/pillow/` |
 | [cx-Freeze 8.7.4](https://pypi.org/project/cx-Freeze/8.7.4/) 和 [freeze-core 0.8.1](https://pypi.org/project/freeze-core/0.8.1/) | PSF-2.0、MIT | `licenses/cx-Freeze/`、`licenses/freeze-core/` |
 
 NumPy 和 SciPy 的 Windows wheel 附带 OpenBLAS、LAPACK 和使用 GCC Runtime Library Exception 3.1 的 GCC 运行库代码。声明见各 wheel 自带的 `LICENSE.txt`，相同文本随安装包附带。SQLite 的公有领域声明见 SQLite 项目说明。 [SQLite 版权说明](https://www.sqlite.org/copyright.html)
+
+OCR 的其余 Python 依赖及其精确版本见 `livecaption/requirements.txt`，许可文件随安装包附带。安装包使用 OpenCV 的静态图像处理能力，构建时移除 FFmpeg 视频插件。
 
 ## SoXR 对应源码
 
 安装包在 `licenses/soxr/source/soxr-1.1.0.tar.gz` 提供 SoXR 对应源码和构建文件。也可从 PyPI 下载同一版本的源码发行包。需修改和测试该库时，退出 EchoPane，按源码内的 `BUILDING.md` 构建兼容当前 CPython 与 Windows x64 的 wheel，再用其中的 `soxr` 模块替换安装目录下的 `lib/soxr/`。 [PyPI 源码下载](https://pypi.org/project/soxr/1.1.0/#files) [LGPL 2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html)
 
+## GEOS 对应源码
+
+安装包在 `licenses/shapely/source/geos-3.14.1.tar.bz2` 提供 GEOS 对应源码。Shapely 通过动态链接使用 `lib/shapely.libs/` 下的 GEOS DLL。要替换库，可退出 EchoPane，按 GEOS 的 CMake 构建步骤生成 ABI 兼容的 x64 DLL。使用 Shapely 2.2.0 的 Windows wheel 打包方式构建或替换时，DLL 文件名及其引用需要匹配 Shapely 模块。 [GEOS 源码与构建](https://libgeos.org/usage/download/) [Shapely 构建说明](https://github.com/shapely/shapely/blob/2.2.0/docs/installation.rst)
+
 ## Microsoft Visual C++ 运行库
 
-EchoPane 使用系统中的 Microsoft Visual C++ x64 运行库，最低版本为 14.44.35211.0。构建时会将 NumPy 两个扩展中的 DLL 引用改为系统文件名，并从 Windows MSI 载荷移除 wheel 内附的 Microsoft DLL。缺少运行库时，可先从微软安装。 [Microsoft 运行库说明与下载](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)
+EchoPane 使用系统中的 Microsoft Visual C++ x64 运行库，最低版本为 14.44.35211.0。构建时会将 NumPy 扩展及 GEOS DLL 中的私有运行库引用改为系统文件名，并从 Windows MSI 载荷移除 wheel 内附的 Microsoft DLL。缺少运行库时，可先从微软安装。 [Microsoft 运行库说明与下载](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)
 
 ## 字幕示例照片
 

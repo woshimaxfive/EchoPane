@@ -26,6 +26,7 @@ class CaptionOverlay(tk.Toplevel):
                  *, change_background, change_lock):
         super().__init__(root, bg=theme.CAPTION_KEY)
         self.withdraw()
+        self.capture_visibility = None
         self.title("字幕浮窗")
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -245,6 +246,9 @@ class CaptionOverlay(tk.Toplevel):
                     self.paint_backdrop(self.motion.value)
 
     def reveal(self):
+        if self.capture_visibility is not None:
+            self.capture_visibility = True
+            return
         if self.state() == "withdrawn":
             self.update_idletasks()
             if self.window_bounds is None:
@@ -259,8 +263,22 @@ class CaptionOverlay(tk.Toplevel):
         self.resume_poll()
 
     def hide(self):
+        if self.capture_visibility is not None:
+            self.capture_visibility = False
+            return
         self.pause_poll()
         self.withdraw()
+
+    def suspend_for_capture(self):
+        was_visible = self.state() != "withdrawn"
+        self.hide()
+        self.capture_visibility = was_visible
+
+    def resume_after_capture(self):
+        visible = self.capture_visibility
+        self.capture_visibility = None
+        if visible:
+            self.reveal()
 
     def move_to(self, position):
         self.position = position
