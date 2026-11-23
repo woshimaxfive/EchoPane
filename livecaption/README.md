@@ -28,6 +28,18 @@
 
 开始后，所选窗口的进程树音频或所选麦克风的音频会发往阿里云，使用量计入自己的百炼账户。浏览器同一进程树中其他标签页的声音也可能被采集，麦克风也会收录周围的环境声。
 
+### 通话字幕
+
+在「实时字幕」切到「通话」，选择正在通话的软件窗口和我方麦克风，再点「开始字幕」。两路分别显示输入电平。对方以中文译文显示，开启双语时也会带上原文。我方显示语音识别原文。字幕浮窗、同一场回看和导出都标明「我方」或「对方」。
+
+两路音频分别发往已配置的百炼服务。建议戴耳机，减少对方声音被麦克风再收录。停止时释放两个音源，等待两路收尾，再完成用量记录和已保存字幕的更新。两路均返回用量后显示合计。任一路中断时会停止本场通话字幕，按提示重新选择音源后可再次开始。
+
+### 译音试听
+
+在「实时字幕 → 通话」中选择「我方麦克风」，点「译音试听」。选英语、中文、日语或韩语，点「录音」，看到「正在录音」后说一句话，再点「结束录音」。每段最多录 15 秒，超时自动结束。译音生成后，点「播放译音」从 Windows 默认输出设备听取结果，也可以停止或重播。
+
+试听使用现有百炼 Key。麦克风音频会发往百炼，费用在百炼账单中查看。EchoPane 的「用量」页记录字幕会话。试听结果留在内存里，关闭窗口后清空。试听期间暂停开启新的字幕会话。
+
 点击「保存配置」可将 Key 和业务空间 ID 保存到当前 Windows 用户的凭据管理器，重新打开时会自动填入。单次试用可以直接开始。卸载前可在软件里点「清除配置」，也可在 Windows 凭据管理器删除 `EchoPane/Bailian/Beijing`。
 
 [百炼 API Key 获取说明](https://help.aliyun.com/zh/model-studio/get-api-key)
@@ -46,7 +58,7 @@
 
 ## 界面结构
 
-`app.py` 负责注册页面、连接主窗与浮窗。页面使用 `views.py` 中的现有控件和 `theme.py` 的共享样式。`session.py` 管理实时翻译会话、运行状态和本次译文。`usage.py` 保存本机用量，`usage_view.py` 显示用量统计。`history.py` 显示回看窗口，`transcripts.py` 保存和导出会话字幕。浮窗的 Windows 交互在 `overlay.py` 与 `caption_controls.py`。
+`app.py` 负责注册页面、连接主窗与浮窗。页面使用 `views.py` 中的现有控件和 `theme.py` 的共享样式。`session.py` 管理实时翻译会话、运行状态和本次译文。`audition.py` 管理短句译音试听和本机播放。`usage.py` 保存本机用量，`usage_view.py` 显示用量统计。`history.py` 显示回看窗口，`transcripts.py` 保存和导出会话字幕。浮窗的 Windows 交互在 `overlay.py` 与 `caption_controls.py`。
 
 增加功能时可在独立页面中实现，复用主题，再把页面注册到主窗的左侧导航。各项功能可以在独立页面维护自身状态。
 
@@ -70,7 +82,7 @@ if (!(Test-Path -LiteralPath $geosSource)) {
     Invoke-WebRequest -Uri 'https://download.osgeo.org/geos/geos-3.14.1.tar.bz2' -OutFile $geosSource
 }
 & $buildPython -B livecaption/build_windows.py bdist_msi
-Get-FileHash -Algorithm SHA256 .local/windows-package/EchoPane-0.2.17-win-x64.msi
+Get-FileHash -Algorithm SHA256 .local/windows-package/EchoPane-0.2.20-win-x64.msi
 ```
 
 生成的 x64 MSI 位于 `.local/windows-package/`。双击安装后，可从开始菜单打开 EchoPane。同一 Windows 用户下升级时，会沿用该用户的字幕外观与已保存的百炼凭据。

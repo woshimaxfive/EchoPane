@@ -21,6 +21,7 @@ SOURCE_HINT = "选择要加字幕的窗口"
 MICROPHONE_HINT = "选择麦克风"
 WINDOW_NOTICE = "音频将发往阿里云。同一浏览器的其他发声标签页也可能被采集。"
 MICROPHONE_NOTICE = "开始后，所选麦克风的声音会发往阿里云百炼。"
+CALL_NOTICE = "所选窗口和麦克风的声音将分别发往阿里云百炼。建议戴耳机，减少回声。"
 KEY_HINT = "请先填写百炼北京地域的 API Key。"
 CAPTION_SAMPLE = "沿着海岸，前面就是那片沙滩。"
 CAPTION_SAMPLE_ORIGINAL = "The beach is up the coast."
@@ -113,11 +114,12 @@ class SessionBar(ttk.Frame):
 
 
 class LivePage(ttk.Frame):
-    def __init__(self, parent, source_changed, open_history):
+    def __init__(self, parent, source_changed, open_history, open_audition):
         super().__init__(parent, padding=PAGE_PADDING)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
         self.sources = {}
+        self.call_microphones = {}
         self.previous_selections = {}
         self.mode = "window"
         self.mode_choice = tk.StringVar(master=self, value=self.mode)
@@ -131,23 +133,48 @@ class LivePage(ttk.Frame):
         audio.grid(row=1, columnspan=2, sticky="ew", pady=SECTION_GAP)
         audio.columnconfigure(1, weight=1)
         self.source_modes = segmented_choices(
-            audio, self.mode_choice, (("window", "播放窗口"), ("microphone", "麦克风")), self.change_mode,
+            audio, self.mode_choice, (("window", "播放窗口"), ("microphone", "麦克风"), ("call", "通话")),
+            self.change_mode,
         )
         self.source_modes.grid(row=0, columnspan=2, sticky="w", padx=(0, 10))
-        self.refresh_button = ttk.Button(audio, text="↻ 刷新", style="PanelQuiet.TButton", command=self.refresh)
-        self.refresh_button.grid(row=0, column=2, sticky="e")
+        source_actions = ttk.Frame(audio, style="Panel.TFrame")
+        source_actions.grid(row=0, column=2, sticky="e")
+        self.audition_button = ttk.Button(source_actions, text="译音试听", style="PanelQuiet.TButton", command=open_audition)
+        self.audition_button.grid(row=0, column=0, padx=(0, 6))
+        self.refresh_button = ttk.Button(source_actions, text="↻ 刷新", style="PanelQuiet.TButton", command=self.refresh)
+        self.refresh_button.grid(row=0, column=1)
+        window_label = ttk.Label(audio, text="对方通话窗口", style="Panel.TLabel")
+        window_label.grid(row=2, column=0, sticky="w", padx=(0, 12), pady=(9, 6))
         self.source = ttk.Combobox(audio, state="readonly", width=20, height=8)
-        self.source.grid(row=1, columnspan=3, sticky="ew", pady=(7, 14))
+        self.source.grid(row=2, columnspan=3, sticky="ew", pady=(7, 14))
         self.source.set(SOURCE_HINT)
         self.source.bind("<<ComboboxSelected>>", lambda _event: self.source_changed())
+        microphone_label = ttk.Label(audio, text="我方麦克风", style="Panel.TLabel")
+        microphone_label.grid(row=3, column=0, sticky="w", padx=(0, 12), pady=(0, 11))
+        self.call_microphone = ttk.Combobox(audio, state="readonly", width=20, height=8)
+        self.call_microphone.grid(row=3, column=1, columnspan=2, sticky="ew", pady=(0, 11))
+        self.call_microphone.set(MICROPHONE_HINT)
+        self.call_microphone.bind("<<ComboboxSelected>>", lambda _event: self.source_changed())
 
-        ttk.Frame(audio, height=1, style="Divider.TFrame").grid(row=2, columnspan=3, sticky="ew")
+        ttk.Frame(audio, height=1, style="Divider.TFrame").grid(row=5, columnspan=3, sticky="ew")
         self.meter = theme.LevelMeter(audio)
-        ttk.Label(audio, text="输入电平", style="Panel.TLabel").grid(row=3, column=0, sticky="w", pady=(11, 0))
-        self.meter.grid(row=3, column=1, sticky="ew", padx=(14, 0), pady=(11, 0))
+        self.meter_label = ttk.Label(audio, text="输入电平", style="Panel.TLabel")
+        self.meter_label.grid(row=6, column=0, sticky="w", pady=(11, 0))
+        self.meter.grid(row=6, column=1, sticky="ew", padx=(14, 0), pady=(11, 0))
         ttk.Label(audio, textvariable=self.meter.reading, style="MeterValue.TLabel", width=5, anchor="e").grid(
-            row=3, column=2, sticky="e", pady=(11, 0)
+            row=6, column=2, sticky="e", pady=(11, 0)
         )
+        self.microphone_meter = theme.LevelMeter(audio)
+        self.microphone_meter.grid(row=7, column=1, sticky="ew", padx=(14, 0), pady=(8, 0))
+        microphone_meter_label = ttk.Label(audio, text="我方电平", style="Panel.TLabel")
+        microphone_meter_label.grid(row=7, column=0, sticky="w", pady=(8, 0))
+        microphone_reading = ttk.Label(audio, textvariable=self.microphone_meter.reading,
+                                       style="MeterValue.TLabel", width=5, anchor="e")
+        microphone_reading.grid(row=7, column=2, sticky="e", pady=(8, 0))
+        self.call_fields = (window_label, microphone_label, self.call_microphone, self.audition_button, microphone_meter_label,
+                            self.microphone_meter, microphone_reading)
+        for field in self.call_fields:
+            field.grid_remove()
         self.audio_notice = ttk.Label(self, text=WINDOW_NOTICE, style="Hint.TLabel", wraplength=400)
         self.audio_notice.grid(row=2, columnspan=2, sticky="sew", pady=(10, 0))
         wrap_label(self.audio_notice)
@@ -157,7 +184,18 @@ class LivePage(ttk.Frame):
             return
         self.previous_selections[self.mode] = self.selected_source()
         self.mode = mode
-        self.audio_notice.configure(text=MICROPHONE_NOTICE if mode == "microphone" else WINDOW_NOTICE)
+        self.audio_notice.configure(text={"window": WINDOW_NOTICE, "microphone": MICROPHONE_NOTICE,
+                                          "call": CALL_NOTICE}[mode])
+        self.meter_label.configure(text="对方电平" if mode == "call" else "输入电平")
+        if mode == "call":
+            self.source.grid_configure(column=1, columnspan=2, pady=(9, 6))
+        else:
+            self.source.grid_configure(column=0, columnspan=3, pady=(7, 14))
+        for field in self.call_fields:
+            if mode == "call":
+                field.grid()
+            else:
+                field.grid_remove()
         self.update_sources(self.previous_selections.get(mode))
 
     def refresh(self):
@@ -165,31 +203,50 @@ class LivePage(ttk.Frame):
 
     def update_sources(self, previous):
         self.source_error = ""
-        if self.mode == "microphone":
+        if self.mode in ("microphone", "call"):
             try:
-                self.sources = microphone_sources()
+                microphones = microphone_sources()
             except RuntimeError as exc:
-                self.sources = {}
+                microphones = {}
                 self.source_error = str(exc)
-            if not self.sources and not self.source_error:
+            if not microphones and not self.source_error:
                 self.source_error = "没有可用的麦克风，请连接或启用麦克风后刷新。"
+        if self.mode == "microphone":
+            self.sources = microphones
             hint = MICROPHONE_HINT
         else:
             self.sources = window_sources()
-            hint = SOURCE_HINT
-        while hint in self.sources:
-            hint += "…"
-        self.source.configure(values=tuple(self.sources))
-        current = next((label for label, source in self.sources.items() if source == previous), hint)
-        self.source.set(current)
+            hint = "选择对方的通话窗口" if self.mode == "call" else SOURCE_HINT
+        self.fill_source(self.source, self.sources, previous, hint)
+        if self.mode == "call":
+            previous_microphone = self.selected_microphone()
+            self.call_microphones = microphones
+            self.fill_source(self.call_microphone, microphones, previous_microphone, MICROPHONE_HINT)
         self.source_changed()
+
+    @staticmethod
+    def fill_source(field, sources, previous, hint):
+        while hint in sources:
+            hint += "…"
+        field.configure(values=tuple(sources))
+        field.set(next((label for label, source in sources.items() if source == previous), hint))
 
     def selected_source(self):
         return self.sources.get(self.source.get())
 
+    def selected_microphone(self):
+        return self.call_microphones.get(self.call_microphone.get())
+
+    def input_ready(self):
+        return self.selected_source() is not None and (self.mode != "call" or self.selected_microphone() is not None)
+
     def source_prompt(self):
+        if self.mode == "call" and self.selected_source() is None:
+            return "请选择正在通话的软件窗口。"
         if self.source_error:
             return self.source_error
+        if self.mode == "call":
+            return "请选择自己的麦克风。"
         if self.mode == "microphone":
             return "请选择要用于字幕的麦克风。"
         return "请选择要加字幕的播放窗口。"
@@ -204,10 +261,23 @@ class LivePage(ttk.Frame):
             raise RuntimeError("请刷新并选择正在播放的程序。")
         return partial(AudioSource, source)
 
+    def microphone_factory(self):
+        if self.mode == "call":
+            source = self.selected_microphone()
+            if source is None:
+                raise RuntimeError(self.source_error or "请选择自己的麦克风。")
+            return partial(MicrophoneAudio, source)
+
+    def set_levels(self, source, microphone):
+        self.meter.set_level(source)
+        self.microphone_meter.set_level(microphone)
+
     def set_active(self, active):
         self.source.configure(state="disabled" if active else "readonly")
+        self.call_microphone.configure(state="disabled" if active else "readonly")
         state = ["disabled"] if active else ["!disabled"]
         self.refresh_button.state(state)
+        self.audition_button.state(state)
         for button in self.source_modes.winfo_children():
             button.state(state)
 

@@ -1,4 +1,4 @@
-"""Own one live translation worker and hand its events to the interface."""
+"""Own a live caption session and hand its events to the interface."""
 
 import asyncio
 import queue
@@ -88,16 +88,19 @@ class LiveSession:
         self.captions = {}
         self.bilingual = False
         self.originals = OriginalCaptions()
+        self.microphone_level = 0.0
 
-    def start(self, open_source, key, workspace, *, bilingual=False):
+    def start(self, open_source, key, workspace, *, bilingual=False, microphone=None):
         if self.state.active:
             return
         record = UsageRecord(uuid4().hex, time.time(), LIVE_MODEL)
         usage_start = (record, time.monotonic())
         self.stop_flag = threading.Event()
         self.state = SessionState(Phase.CONNECTING, "正在连接百炼…")
+        args = (open_source, key, workspace, self.stop_flag, self.emit)
         worker = threading.Thread(
-            target=self.run, args=(open_source, key, workspace, self.stop_flag, self.emit),
+            target=self.run if microphone is None else self.run_call,
+            args=args if microphone is None else (microphone, *args),
             kwargs={"usage_history": self.usage_history, "usage_start": usage_start,
                     "bilingual": bilingual}, daemon=True,
         )
@@ -113,6 +116,7 @@ class LiveSession:
             self.captions.clear()
             self.bilingual = bilingual
             self.originals = OriginalCaptions()
+            self.microphone_level = 0.0
 
     def emit(self, kind, data):
         self.events.put((kind, data))
@@ -126,6 +130,7 @@ class LiveSession:
     def reset(self):
         if not self.state.active:
             self.state = SessionState()
+            self.microphone_level = 0.0
 
     def transcript(self):
         return {ident: self.caption_text(ident) for ident in self.captions}
@@ -192,6 +197,10 @@ class LiveSession:
             elif kind == "level" and phase is not Phase.STOPPING:
                 next_phase = Phase.LISTENING if phase is Phase.WAITING and data > 0.03 else phase
                 self.state = replace(self.state, phase=next_phase, level=data)
+            elif kind == "microphone_level" and phase is not Phase.STOPPING:
+                self.microphone_level = data
+                if phase is Phase.WAITING and data > 0.03:
+                    self.state = replace(self.state, phase=Phase.LISTENING)
             elif kind == "caption":
                 previous = self.captions.get(data.ident)
                 if previous and previous.text == data.text and previous.final == data.final:
@@ -199,7 +208,7 @@ class LiveSession:
                 if previous and previous.final and not data.final:
                     continue
                 if self.state.active and phase not in (Phase.STOPPING, Phase.TRANSLATING):
-                    self.state = replace(self.state, phase=Phase.TRANSLATING, message="译文显示在字幕浮窗。")
+                    self.state = replace(self.state, phase=Phase.TRANSLATING, message="字幕显示在桌面浮窗。")
                 first_shown = previous.first_shown if previous else self.elapsed()
                 self.captions[data.ident] = TranscriptCaption(data.text, data.final, first_shown)
                 yield kind, data
@@ -223,10 +232,83 @@ class LiveSession:
                     message += " 本次用量保存失败。"
                 self.finished_at = time.monotonic()
                 self.state = SessionState(Phase.INTERRUPTED if data else Phase.STOPPED, message)
+                self.microphone_level = 0.0
                 yield kind, data
 
     @staticmethod
-    def run(open_source, key, workspace, stop, emit, *, usage_history=None, usage_start=None, bilingual=False):
+    def run_call(microphone, open_source, key, workspace, stop, emit, *,
+                 usage_history=None, usage_start=None, bilingual=False):
+        events = queue.SimpleQueue()
+        workers = []
+        for speaker, source, originals in (("对方", open_source, bilingual), ("我方", microphone, True)):
+            def forward(kind, data, speaker=speaker):
+                events.put((speaker, kind, data))
+
+            worker = threading.Thread(target=LiveSession.run, args=(source, key, workspace, stop, forward),
+                                      kwargs={"bilingual": originals}, daemon=True)
+            try:
+                worker.start()
+            except RuntimeError:
+                stop.set()
+                forward("end", "无法开始采音，请重试。")
+            else:
+                workers.append(worker)
+
+        pending = 2
+        capturing = False
+        reported_usage = {}
+        total = None
+        end_event, error = "end", ""
+        while pending:
+            speaker, kind, data = events.get()
+            if kind in ("end", "content_blocked"):
+                pending -= 1
+                if data:
+                    stop.set()
+                    if not error or kind == "content_blocked":
+                        end_event, error = kind, f"{speaker}：{data}"
+            elif kind == "status":
+                capturing = True
+                emit(kind, "正在采集通话声音，字幕显示在桌面浮窗。")
+            elif kind == "usage":
+                reported_usage[speaker] = data
+                if len(reported_usage) == 2:
+                    first, second = reported_usage.values()
+                    total = (first[0] + second[0], first[1] + second[1])
+                    emit(kind, total)
+            else:
+                LiveSession.forward_call_caption(speaker, kind, data, emit)
+        for worker in workers:
+            worker.join()
+        if capturing or reported_usage:
+            LiveSession.save_usage(usage_history, usage_start, total, error, emit)
+        emit(end_event, error)
+
+    @staticmethod
+    def forward_call_caption(speaker, kind, data, emit):
+        prefix = f"{speaker}:"
+        if kind == "level":
+            emit("microphone_level" if speaker == "我方" else kind, data)
+        elif (speaker, kind) in (("我方", "original"), ("对方", "caption")) and data.text:
+            emit("caption", CaptionUpdate(prefix + data.ident, f"{speaker} · {data.text}", data.final))
+        elif speaker == "对方" and kind == "original":
+            emit(kind, data._replace(ident=prefix + data.ident))
+        elif speaker == "对方" and kind == "caption_link":
+            emit(kind, (prefix + data[0], prefix + data[1]))
+
+    @staticmethod
+    def save_usage(usage_history, usage_start, tokens, error, emit):
+        if usage_history is not None and usage_start is not None:
+            record, began = usage_start
+            outcome = "interrupted" if error else "completed"
+            try:
+                usage_history.save(record.snapshot(time.monotonic() - began, tokens, outcome))
+            except (OSError, sqlite3.Error):
+                emit("usage_save_failed", None)
+
+    @staticmethod
+    def run(open_source, key, workspace, stop, emit, *, usage_history=None, usage_start=None,
+            bilingual=False, voice_language=None):
         end_event = "end"
         error = ""
         latest_usage = None
@@ -242,10 +324,14 @@ class LiveSession:
             emit(kind, data)
 
         try:
-            asyncio.run(subtitles(open_source, key, workspace, stop, forward, bilingual=bilingual))
+            options = {"bilingual": bilingual}
+            if voice_language is not None:
+                options["voice_language"] = voice_language
+            asyncio.run(subtitles(open_source, key, workspace, stop, forward, **options))
         except ContentInspectionFailed:
             end_event = "content_blocked"
-            error = "百炼内容审核中断，字幕已停止。请等当前片段结束或切换音源后重新开始。"
+            error = ("百炼内容审核中断，请换一句重试。" if voice_language is not None else
+                     "百炼内容审核中断，字幕已停止。请等当前片段结束或切换音源后重新开始。")
         except InvalidStatus as exc:
             error = f"连接被拒绝（HTTP {exc.response.status_code}），请检查北京地域 Key、业务空间或网络。"
         except ConnectionClosed:
@@ -255,12 +341,7 @@ class LiveSession:
         except Exception as exc:
             error = str(exc).replace(key, "[已隐藏]")[:200] or "翻译中断，请重试。"
         finally:
-            if usage_history is not None and usage_start is not None and (capturing or latest_usage is not None):
-                record, began = usage_start
-                outcome = "interrupted" if error else "completed"
-                try:
-                    usage_history.save(record.snapshot(time.monotonic() - began, latest_usage, outcome))
-                except (OSError, sqlite3.Error):
-                    emit("usage_save_failed", None)
+            if capturing or latest_usage is not None:
+                LiveSession.save_usage(usage_history, usage_start, latest_usage, error, emit)
             emit(end_event, error)
 

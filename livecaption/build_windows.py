@@ -16,7 +16,7 @@ from screen_ocr import MODEL_HASHES
 SOURCE = Path(__file__).resolve().parent
 LOCAL = SOURCE.parent / ".local"
 BUILD_DIR = LOCAL / "windows-build"
-VERSION = "0.2.17"
+VERSION = "0.2.20"
 LIBRARY_SOURCES = (
     ("soxr", "soxr-1.1.0.tar.gz", "9f228ae21c78fa9359ca98d8a5e8e91f30639e438e574133dace62c5b5309e44"),
     ("shapely", "geos-3.14.1.tar.bz2", "3c20919cda9a505db07b5216baa980bacdaa0702da715b43f176fb07eff7e716"),

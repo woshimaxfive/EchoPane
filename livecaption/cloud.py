@@ -1,4 +1,4 @@
-"""Beijing DashScope realtime speech translation, text output only."""
+"""Beijing DashScope realtime speech translation."""
 import asyncio
 import base64
 import json
@@ -12,6 +12,8 @@ from capture import pcm_level
 
 
 LIVE_MODEL = "qwen3.5-livetranslate-flash-realtime"
+VOICE_RECORD_SECONDS = 15
+VOICE_SAMPLE_RATE = 24000
 
 
 class ContentInspectionFailed(RuntimeError):
@@ -55,7 +57,7 @@ async def expect(ws, kind):
                 return
 
 
-async def subtitles(open_source, key, workspace, stop, emit, *, bilingual=False):
+async def subtitles(open_source, key, workspace, stop, emit, *, bilingual=False, voice_language=None):
     ready = False
 
     async def run_session():
@@ -65,16 +67,22 @@ async def subtitles(open_source, key, workspace, stop, emit, *, bilingual=False)
             await expect(ws, "session.created")
             if stop.is_set():
                 return
-            await ws.send(json.dumps({"type": "session.update", "session": {
+            options = {
                 "modalities": ["text"], "translation": {"language": "zh"},
                 "input_audio_format": "pcm", "sample_rate": 16000,
                 "input_audio_transcription": {"model": "qwen3-asr-flash-realtime" if bilingual else None},
-            }}))
+            }
+            stream_options = {"bilingual": bilingual}
+            if voice_language is not None:
+                options.update(modalities=["text", "audio"], translation={"language": voice_language},
+                               output_audio_format="pcm", enable_voice_clone=False)
+                stream_options["recording_limit"] = VOICE_RECORD_SECONDS
+            await ws.send(json.dumps({"type": "session.update", "session": options}))
             await expect(ws, "session.updated")
             if stop.is_set():
                 return
             ready = True
-            await stream(ws, open_source, stop, emit, bilingual=bilingual)
+            await stream(ws, open_source, stop, emit, **stream_options)
 
     if stop.is_set():
         return
@@ -95,12 +103,14 @@ async def subtitles(open_source, key, workspace, stop, emit, *, bilingual=False)
 
 def emit_caption(event, emit, *, bilingual=False):
     kind = event.get("type")
-    if kind in ("response.text.text", "response.text.done"):
+    if kind in ("response.text.text", "response.text.done",
+                "response.audio_transcript.text", "response.audio_transcript.done"):
         # Keep the confirmed prefix. The stash can be rewritten by the server.
         ident = event.get("item_id") or event.get("response_id")
-        text = (event.get("text") or "").strip()
+        field = "transcript" if kind == "response.audio_transcript.done" else "text"
+        text = (event.get(field) or "").strip()
         if ident and text:
-            emit("caption", CaptionUpdate(ident, text, kind == "response.text.done"))
+            emit("caption", CaptionUpdate(ident, text, kind.endswith(".done")))
     elif bilingual and kind == "conversation.item.created":
         item = event.get("item") or {}
         previous = event.get("previous_item_id")
@@ -121,17 +131,22 @@ def emit_caption(event, emit, *, bilingual=False):
             emit("original", CaptionUpdate(ident, text, final))
 
 
-async def stream(ws, open_source, stop, emit, *, bilingual=False):
+async def stream(ws, open_source, stop, emit, *, bilingual=False, recording_limit=None):
     async def send_audio():
         if stop.is_set():
             return
         pending = bytearray()
         with open_source() as source:
+            started_at = time.monotonic()
+            deadline = started_at + recording_limit if recording_limit is not None else float("inf")
             emit("status", "正在采音，译文显示在字幕窗。")
             meter = bytearray()
-            next_level = time.monotonic() + 0.12
+            next_level = started_at + 0.12
             while not stop.is_set():
                 now = time.monotonic()
+                if now >= deadline:
+                    stop.set()
+                    break
                 pcm = source.read()
                 pending.extend(pcm)
                 meter.extend(pcm)
@@ -146,6 +161,8 @@ async def stream(ws, open_source, stop, emit, *, bilingual=False):
                     del pending[:3200]
                 await asyncio.sleep(0.012)
             pending.extend(source.read(last=True))
+        if recording_limit is not None:
+            emit("capture_finished", None)
         if pending:
             await send_chunk(bytes(pending))
 
@@ -170,6 +187,9 @@ async def stream(ws, open_source, stop, emit, *, bilingual=False):
                     raise RuntimeError("本次翻译未完整返回，请重新开始。")
             elif kind == "session.finished":
                 return
+            elif kind == "response.audio.delta" and recording_limit is not None:
+                if delta := event.get("delta"):
+                    emit("audio", base64.b64decode(delta, validate=True))
             else:
                 emit_caption(event, emit, bilingual=bilingual)
         raise RuntimeError("翻译连接已经关闭。")

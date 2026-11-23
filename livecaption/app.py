@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import theme
+from audition import VoiceAudition
 from cloud import service_url
 from history import CaptionHistory
 from native_windows import monitor_work_area
@@ -35,6 +36,7 @@ class LiveCaptions:
         usage_history = UsageHistory()
         self.session = LiveSession(usage_history)
         self.appearance = load_appearance()
+        self.audition = None
         self.history = None
         self.archive = TranscriptArchive()
         self.saved_sessions = {}
@@ -58,7 +60,7 @@ class LiveCaptions:
         self.header.grid(row=0, column=0, sticky="ew")
         self.tabs = theme.Workspace(root, header=self.header, collapsed=load_sidebar_collapsed(), on_toggle=self.save_sidebar)
         self.tabs.grid(row=1, column=0, sticky="nsew")
-        self.live = LivePage(self.tabs, self.input_changed, self.open_history)
+        self.live = LivePage(self.tabs, self.input_changed, self.open_history, self.open_audition)
         self.caption = CaptionPage(
             self.tabs, self.appearance, scale,
             change_size=self.set_caption_size, change_background=self.set_caption_background,
@@ -160,7 +162,7 @@ class LiveCaptions:
         if state.phase is Phase.STOPPING and self.rendered_phase is not Phase.STOPPING:
             self.overlay.set_stopping()
         self.rendered_phase = state.phase
-        self.live.meter.set_level(state.level)
+        self.live.set_levels(state.level, self.session.microphone_level)
 
         live_page = self.tabs.select() == str(self.live)
         if not live_page and not state.active:
@@ -174,7 +176,7 @@ class LiveCaptions:
         if state.phase is not Phase.IDLE:
             self.footer.show(state, "", "", compact=not live_page)
             return
-        if self.live.selected_source() is None:
+        if not self.live.input_ready():
             label, detail = "待选择音源", self.live.source_prompt()
         elif not self.settings.configuration()[0]:
             label, detail = "待配置", KEY_HINT
@@ -189,30 +191,26 @@ class LiveCaptions:
         field.focus_set()
 
     def start(self):
-        if self.running:
+        if self.running or self.audition is not None:
             return
-        key, workspace = self.settings.configuration()
+        field = self.live.source
         try:
             open_source = self.live.capture_factory()
+            field = self.live.call_microphone
+            microphone = self.live.microphone_factory()
         except RuntimeError as exc:
             self.session.reset()
             self.validation_message = str(exc)
-            self.show_input_page(self.live, self.live.source)
+            self.show_input_page(self.live, field)
             self.render_session()
             return
-        if not key:
-            self.show_service_error(KEY_HINT, self.settings.key_entry)
-            return
-        try:
-            service_url(workspace)
-        except ValueError as exc:
-            self.settings.show_advanced(True)
-            self.show_service_error(str(exc), self.settings.workspace_entry)
+        configuration = self.service_configuration()
+        if configuration is None:
             return
 
         self.tabs.select(self.live)
         self.validation_message = ""
-        self.session.start(open_source, key, workspace, bilingual=self.appearance.bilingual)
+        self.session.start(open_source, *configuration, bilingual=self.appearance.bilingual, microphone=microphone)
         if self.running:
             self.save_on_finish = False
             self.archive_notice = ""
@@ -224,6 +222,38 @@ class LiveCaptions:
             self.overlay.begin()
             self.root.after(40, self.poll)
         self.render_session()
+
+    def open_audition(self):
+        if self.running or self.audition is not None or self.live.mode != "call":
+            return
+        try:
+            microphone = self.live.microphone_factory()
+        except RuntimeError as exc:
+            self.validation_message = str(exc)
+            self.show_input_page(self.live, self.live.call_microphone)
+            self.render_session()
+            return
+        configuration = self.service_configuration()
+        if configuration is not None:
+            self.audition = VoiceAudition(self.root, microphone, *configuration, on_close=self.audition_closed)
+
+    def audition_closed(self):
+        self.audition = None
+        if self.closing:
+            self.close()
+
+    def service_configuration(self):
+        key, workspace = self.settings.configuration()
+        if not key:
+            self.show_service_error(KEY_HINT, self.settings.key_entry)
+            return
+        try:
+            service_url(workspace)
+        except ValueError as exc:
+            self.settings.show_advanced(True)
+            self.show_service_error(str(exc), self.settings.workspace_entry)
+        else:
+            return key, workspace
 
     def show_service_error(self, message, field):
         self.session.reset()
@@ -240,6 +270,8 @@ class LiveCaptions:
         self.closing = True
         if self.running:
             self.stop()
+        elif self.audition is not None:
+            self.audition.close()
         else:
             if self.save_on_finish and not self.save_current_transcript():
                 messagebox.showwarning("字幕未更新", "无法更新本场字幕，已保留上次保存的版本。", parent=self.root)
