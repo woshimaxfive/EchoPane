@@ -8,7 +8,7 @@ from typing import NamedTuple
 
 from websockets.asyncio.client import connect
 
-from capture import AudioSource, pcm_level
+from capture import pcm_level
 
 
 LIVE_MODEL = "qwen3.5-livetranslate-flash-realtime"
@@ -55,7 +55,7 @@ async def expect(ws, kind):
                 return
 
 
-async def subtitles(process, key, workspace, stop, emit, *, bilingual=False):
+async def subtitles(open_source, key, workspace, stop, emit, *, bilingual=False):
     ready = False
 
     async def run_session():
@@ -74,7 +74,7 @@ async def subtitles(process, key, workspace, stop, emit, *, bilingual=False):
             if stop.is_set():
                 return
             ready = True
-            await stream(ws, process, stop, emit, bilingual=bilingual)
+            await stream(ws, open_source, stop, emit, bilingual=bilingual)
 
     if stop.is_set():
         return
@@ -121,20 +121,17 @@ def emit_caption(event, emit, *, bilingual=False):
             emit("original", CaptionUpdate(ident, text, final))
 
 
-async def stream(ws, process, stop, emit, *, bilingual=False):
+async def stream(ws, open_source, stop, emit, *, bilingual=False):
     async def send_audio():
-        with AudioSource(process) as source:
+        if stop.is_set():
+            return
+        pending = bytearray()
+        with open_source() as source:
             emit("status", "正在采音，译文显示在字幕窗。")
-            pending = bytearray()
             meter = bytearray()
-            next_check = 0
             next_level = time.monotonic() + 0.12
             while not stop.is_set():
                 now = time.monotonic()
-                if now >= next_check:
-                    if not process.is_running():
-                        raise RuntimeError("声音来源已关闭。")
-                    next_check = now + 0.5
                 pcm = source.read()
                 pending.extend(pcm)
                 meter.extend(pcm)
@@ -149,10 +146,8 @@ async def stream(ws, process, stop, emit, *, bilingual=False):
                     del pending[:3200]
                 await asyncio.sleep(0.012)
             pending.extend(source.read(last=True))
-            if pending:
-                await send_chunk(bytes(pending))
-        async with asyncio.timeout(4):
-            await ws.send('{"type":"session.finish"}')
+        if pending:
+            await send_chunk(bytes(pending))
 
     async def send_chunk(chunk):
         async with asyncio.timeout(4):
@@ -187,7 +182,9 @@ async def stream(ws, process, stop, emit, *, bilingual=False):
             task.result()
         if receiver in done and not stop.is_set():
             raise RuntimeError("云端已结束本次翻译，请重新开始。")
-        if sender in done:
+        if sender in done and receiver not in done:
+            async with asyncio.timeout(4):
+                await ws.send('{"type":"session.finish"}')
             await asyncio.wait_for(receiver, timeout=8)
     finally:
         for task in (sender, receiver):

@@ -3,12 +3,14 @@
 import os
 import tkinter as tk
 import webbrowser
+from functools import partial
 from tkinter import font, ttk
 
 import theme
-from capture import window_sources
+from capture import AudioSource, window_sources
 from cloud import service_url
 from credentials import clear_credentials, load_credentials, save_credentials
+from microphone import MicrophoneAudio, microphone_sources
 from preferences import BACKGROUNDS, CAPTION_SIZES
 from session import Phase
 
@@ -16,6 +18,9 @@ from session import Phase
 LIVE_TITLE = "实时字幕"
 APPEARANCE_TITLE = "字幕外观"
 SOURCE_HINT = "选择要加字幕的窗口"
+MICROPHONE_HINT = "选择麦克风"
+WINDOW_NOTICE = "音频将发往阿里云。同一浏览器的其他发声标签页也可能被采集。"
+MICROPHONE_NOTICE = "开始后，所选麦克风的声音会发往阿里云百炼。"
 KEY_HINT = "请先填写百炼北京地域的 API Key。"
 CAPTION_SAMPLE = "沿着海岸，前面就是那片沙滩。"
 CAPTION_SAMPLE_ORIGINAL = "The beach is up the coast."
@@ -113,6 +118,10 @@ class LivePage(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
         self.sources = {}
+        self.previous_selections = {}
+        self.mode = "window"
+        self.mode_choice = tk.StringVar(master=self, value=self.mode)
+        self.source_error = ""
         self.source_changed = source_changed
         page_title(self, LIVE_TITLE)
         self.history_button = ttk.Button(self, text="字幕回看", style="Outline.TButton", command=open_history)
@@ -121,7 +130,10 @@ class LivePage(ttk.Frame):
         audio = ttk.Frame(self, style="Panel.TFrame", padding=SECTION_PADDING)
         audio.grid(row=1, columnspan=2, sticky="ew", pady=SECTION_GAP)
         audio.columnconfigure(1, weight=1)
-        ttk.Label(audio, text="播放窗口", style="PanelSection.TLabel").grid(row=0, column=0, sticky="w")
+        self.source_modes = segmented_choices(
+            audio, self.mode_choice, (("window", "播放窗口"), ("microphone", "麦克风")), self.change_mode,
+        )
+        self.source_modes.grid(row=0, columnspan=2, sticky="w", padx=(0, 10))
         self.refresh_button = ttk.Button(audio, text="↻ 刷新", style="PanelQuiet.TButton", command=self.refresh)
         self.refresh_button.grid(row=0, column=2, sticky="e")
         self.source = ttk.Combobox(audio, state="readonly", width=20, height=8)
@@ -136,25 +148,68 @@ class LivePage(ttk.Frame):
         ttk.Label(audio, textvariable=self.meter.reading, style="MeterValue.TLabel", width=5, anchor="e").grid(
             row=3, column=2, sticky="e", pady=(11, 0)
         )
-        notice = ttk.Label(self, text="音频将发往阿里云。同一浏览器的其他发声标签页也可能被采集。",
-                           style="Hint.TLabel", wraplength=400)
-        notice.grid(row=2, columnspan=2, sticky="sew", pady=(10, 0))
-        wrap_label(notice)
+        self.audio_notice = ttk.Label(self, text=WINDOW_NOTICE, style="Hint.TLabel", wraplength=400)
+        self.audio_notice.grid(row=2, columnspan=2, sticky="sew", pady=(10, 0))
+        wrap_label(self.audio_notice)
+
+    def change_mode(self, mode):
+        if mode == self.mode:
+            return
+        self.previous_selections[self.mode] = self.selected_source()
+        self.mode = mode
+        self.audio_notice.configure(text=MICROPHONE_NOTICE if mode == "microphone" else WINDOW_NOTICE)
+        self.update_sources(self.previous_selections.get(mode))
 
     def refresh(self):
-        previous = self.selected_process()
-        self.sources = window_sources()
+        self.update_sources(self.selected_source())
+
+    def update_sources(self, previous):
+        self.source_error = ""
+        if self.mode == "microphone":
+            try:
+                self.sources = microphone_sources()
+            except RuntimeError as exc:
+                self.sources = {}
+                self.source_error = str(exc)
+            if not self.sources and not self.source_error:
+                self.source_error = "没有可用的麦克风，请连接或启用麦克风后刷新。"
+            hint = MICROPHONE_HINT
+        else:
+            self.sources = window_sources()
+            hint = SOURCE_HINT
+        while hint in self.sources:
+            hint += "…"
         self.source.configure(values=tuple(self.sources))
-        current = next((label for label, process in self.sources.items() if process == previous), SOURCE_HINT)
+        current = next((label for label, source in self.sources.items() if source == previous), hint)
         self.source.set(current)
         self.source_changed()
 
-    def selected_process(self):
+    def selected_source(self):
         return self.sources.get(self.source.get())
+
+    def source_prompt(self):
+        if self.source_error:
+            return self.source_error
+        if self.mode == "microphone":
+            return "请选择要用于字幕的麦克风。"
+        return "请选择要加字幕的播放窗口。"
+
+    def capture_factory(self):
+        source = self.selected_source()
+        if source is None:
+            raise RuntimeError(self.source_prompt())
+        if self.mode == "microphone":
+            return partial(MicrophoneAudio, source)
+        if not source.is_running():
+            raise RuntimeError("请刷新并选择正在播放的程序。")
+        return partial(AudioSource, source)
 
     def set_active(self, active):
         self.source.configure(state="disabled" if active else "readonly")
-        self.refresh_button.state(["disabled"] if active else ["!disabled"])
+        state = ["disabled"] if active else ["!disabled"]
+        self.refresh_button.state(state)
+        for button in self.source_modes.winfo_children():
+            button.state(state)
 
 
 class CaptionPreview(tk.Canvas):

@@ -174,8 +174,8 @@ class LiveCaptions:
         if state.phase is not Phase.IDLE:
             self.footer.show(state, "", "", compact=not live_page)
             return
-        if self.live.selected_process() is None:
-            label, detail = "待选择音源", "请选择要加字幕的播放窗口。"
+        if self.live.selected_source() is None:
+            label, detail = "待选择音源", self.live.source_prompt()
         elif not self.settings.configuration()[0]:
             label, detail = "待配置", KEY_HINT
         else:
@@ -191,11 +191,12 @@ class LiveCaptions:
     def start(self):
         if self.running:
             return
-        process = self.live.selected_process()
         key, workspace = self.settings.configuration()
-        if not process or not process.is_running():
+        try:
+            open_source = self.live.capture_factory()
+        except RuntimeError as exc:
             self.session.reset()
-            self.validation_message = "请刷新并选择正在播放的程序。"
+            self.validation_message = str(exc)
             self.show_input_page(self.live, self.live.source)
             self.render_session()
             return
@@ -211,7 +212,7 @@ class LiveCaptions:
 
         self.tabs.select(self.live)
         self.validation_message = ""
-        self.session.start(process, key, workspace, bilingual=self.appearance.bilingual)
+        self.session.start(open_source, key, workspace, bilingual=self.appearance.bilingual)
         if self.running:
             self.save_on_finish = False
             self.archive_notice = ""

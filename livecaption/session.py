@@ -89,7 +89,7 @@ class LiveSession:
         self.bilingual = False
         self.originals = OriginalCaptions()
 
-    def start(self, process, key, workspace, *, bilingual=False):
+    def start(self, open_source, key, workspace, *, bilingual=False):
         if self.state.active:
             return
         record = UsageRecord(uuid4().hex, time.time(), LIVE_MODEL)
@@ -97,7 +97,7 @@ class LiveSession:
         self.stop_flag = threading.Event()
         self.state = SessionState(Phase.CONNECTING, "正在连接百炼…")
         worker = threading.Thread(
-            target=self.run, args=(process, key, workspace, self.stop_flag, self.emit),
+            target=self.run, args=(open_source, key, workspace, self.stop_flag, self.emit),
             kwargs={"usage_history": self.usage_history, "usage_start": usage_start,
                     "bilingual": bilingual}, daemon=True,
         )
@@ -226,7 +226,7 @@ class LiveSession:
                 yield kind, data
 
     @staticmethod
-    def run(process, key, workspace, stop, emit, *, usage_history=None, usage_start=None, bilingual=False):
+    def run(open_source, key, workspace, stop, emit, *, usage_history=None, usage_start=None, bilingual=False):
         end_event = "end"
         error = ""
         latest_usage = None
@@ -242,7 +242,7 @@ class LiveSession:
             emit(kind, data)
 
         try:
-            asyncio.run(subtitles(process, key, workspace, stop, forward, bilingual=bilingual))
+            asyncio.run(subtitles(open_source, key, workspace, stop, forward, bilingual=bilingual))
         except ContentInspectionFailed:
             end_event = "content_blocked"
             error = "百炼内容审核中断，字幕已停止。请等当前片段结束或切换音源后重新开始。"

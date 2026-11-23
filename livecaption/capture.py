@@ -2,6 +2,7 @@
 import ctypes
 import math
 import os
+import time
 from collections import Counter
 from ctypes import wintypes
 
@@ -74,6 +75,8 @@ class AudioSource:
     def __init__(self, process):
         if not process.is_running():
             raise RuntimeError("所选程序已关闭，请刷新声音来源。")
+        self.process = process
+        self.next_check = 0
         self.tap = ProcessLoopback(process.pid)
         if not self.tap.is_process_specific():
             raise RuntimeError("当前系统无法隔离此程序的声音。")
@@ -94,6 +97,11 @@ class AudioSource:
         self.tap.stop()
 
     def read(self, last=False):
+        now = time.monotonic()
+        if not last and now >= self.next_check:
+            if not self.process.is_running():
+                raise RuntimeError("声音来源已关闭。")
+            self.next_check = now + 0.5
         # ProcTap's native read fetches one WASAPI packet. Drain all pending
         # packets to keep up when the Windows audio engine runs at 10 ms.
         data = bytearray()
