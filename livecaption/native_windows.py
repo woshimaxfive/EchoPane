@@ -25,6 +25,8 @@ USER32.SystemParametersInfoW.argtypes = (wintypes.UINT, wintypes.UINT, ctypes.c_
 USER32.SystemParametersInfoW.restype = wintypes.BOOL
 USER32.MonitorFromRect.argtypes = (ctypes.POINTER(wintypes.RECT), wintypes.DWORD)
 USER32.MonitorFromRect.restype = wintypes.HANDLE
+USER32.MonitorFromWindow.argtypes = (wintypes.HWND, wintypes.DWORD)
+USER32.MonitorFromWindow.restype = wintypes.HANDLE
 
 GWL_EXSTYLE = -20
 GWLP_HWNDPARENT = -8
@@ -151,11 +153,19 @@ def set_window_owner(window, owner):
         raise ctypes.WinError(error)
 
 
-def monitor_work_area(bounds):
+def monitor_work_area(bounds, *, nearest=True):
     left, top, width, height = bounds
     rect = wintypes.RECT(left, top, left + width, top + height)
-    monitor = USER32.MonitorFromRect(ctypes.byref(rect), MONITOR_DEFAULTTONEAREST)
+    flags = MONITOR_DEFAULTTONEAREST if nearest else 0
+    return get_work_area(USER32.MonitorFromRect(ctypes.byref(rect), flags))
+
+
+def window_work_area(window):
+    return get_work_area(USER32.MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST))
+
+
+def get_work_area(monitor):
     info = MonitorInfo(size=ctypes.sizeof(MonitorInfo))
-    if USER32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+    if monitor and USER32.GetMonitorInfoW(monitor, ctypes.byref(info)):
         return info.work
     return None

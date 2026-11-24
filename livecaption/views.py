@@ -1,22 +1,28 @@
 """Workspace pages and the shared live session bar."""
 
+import asyncio
 import os
 import tkinter as tk
 import webbrowser
 from functools import partial
+from queue import Empty, SimpleQueue
+from threading import Thread
 from tkinter import font, ttk
 
 import theme
 from capture import AudioSource, window_sources
-from cloud import service_url
+from cloud import service_url, test_subtitle_connection
 from credentials import clear_credentials, load_credentials, save_credentials
-from preferences import BACKGROUNDS, CAPTION_SIZES
+from preferences import BACKGROUNDS, CAPTION_MODES, CAPTION_SIZES
 from session import Phase
 
 
 LIVE_TITLE = "实时字幕"
 APPEARANCE_TITLE = "字幕外观"
-SOURCE_HINT = "选择要加字幕的窗口"
+SOURCE_HINT = "选择播放窗口或全系统声音"
+SYSTEM_AUDIO = "全系统声音（默认输出）"
+WINDOW_AUDIO_NOTICE = "音频将发往阿里云。同一浏览器的其他发声标签页也可能被采集。"
+SYSTEM_AUDIO_NOTICE = "Windows 默认播放设备上各应用的声音都会发往阿里云。"
 KEY_HINT = "请先填写百炼北京地域的 API Key。"
 CAPTION_SAMPLE = "沿着海岸，前面就是那片沙滩。"
 CAPTION_SAMPLE_ORIGINAL = "The beach is up the coast."
@@ -122,13 +128,13 @@ class LivePage(ttk.Frame):
         audio = ttk.Frame(self, style="Panel.TFrame", padding=SECTION_PADDING)
         audio.grid(row=1, columnspan=2, sticky="ew", pady=SECTION_GAP)
         audio.columnconfigure(1, weight=1)
-        ttk.Label(audio, text="播放窗口", style="PanelSection.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(audio, text="音源", style="PanelSection.TLabel").grid(row=0, column=0, sticky="w")
         self.refresh_button = ttk.Button(audio, text="↻ 刷新", style="PanelQuiet.TButton", command=self.refresh)
         self.refresh_button.grid(row=0, column=2, sticky="e")
         self.source = ttk.Combobox(audio, state="readonly", width=20, height=8)
         self.source.grid(row=1, columnspan=3, sticky="ew", pady=(7, 14))
         self.source.set(SOURCE_HINT)
-        self.source.bind("<<ComboboxSelected>>", lambda _event: self.source_changed())
+        self.source.bind("<<ComboboxSelected>>", self.notify_source_changed)
 
         ttk.Frame(audio, height=1, style="Divider.TFrame").grid(row=2, columnspan=3, sticky="ew")
         self.meter = theme.LevelMeter(audio)
@@ -137,31 +143,42 @@ class LivePage(ttk.Frame):
         ttk.Label(audio, textvariable=self.meter.reading, style="MeterValue.TLabel", width=5, anchor="e").grid(
             row=3, column=2, sticky="e", pady=(11, 0)
         )
-        notice = ttk.Label(self, text="音频将发往阿里云。同一浏览器的其他发声标签页也可能被采集。",
-                           style="Hint.TLabel", wraplength=400)
-        notice.grid(row=2, columnspan=2, sticky="sew", pady=(10, 0))
-        wrap_label(notice)
+        self.notice = ttk.Label(self, text=WINDOW_AUDIO_NOTICE, style="Hint.TLabel", wraplength=400)
+        self.notice.grid(row=2, columnspan=2, sticky="sew", pady=(10, 0))
+        wrap_label(self.notice)
 
     def refresh(self):
+        system = self.system_audio_selected()
         previous = self.selected_source()
         self.sources = window_sources()
-        self.source.configure(values=tuple(self.sources))
-        current = next((label for label, process in self.sources.items() if process == previous), SOURCE_HINT)
+        self.source.configure(values=(SYSTEM_AUDIO, *self.sources))
+        current = SYSTEM_AUDIO if system else next(
+            (label for label, process in self.sources.items() if process == previous), SOURCE_HINT
+        )
         self.source.set(current)
+        self.notify_source_changed()
+
+    def notify_source_changed(self, _event=None):
+        self.notice.configure(text=SYSTEM_AUDIO_NOTICE if self.system_audio_selected() else WINDOW_AUDIO_NOTICE)
         self.source_changed()
+
+    def system_audio_selected(self):
+        return self.source.get() == SYSTEM_AUDIO
 
     def selected_source(self):
         return self.sources.get(self.source.get())
 
     def input_ready(self):
-        return self.selected_source() is not None
+        return self.system_audio_selected() or self.selected_source() is not None
 
     def source_prompt(self):
         if not self.sources:
-            return "请先打开要加字幕的窗口，再刷新列表。"
-        return "请选择要加字幕的播放窗口。"
+            return "请选择全系统声音。要选单个窗口，可打开后再刷新列表。"
+        return "请选择播放窗口或全系统声音。"
 
     def capture_factory(self):
+        if self.system_audio_selected():
+            return AudioSource
         source = self.selected_source()
         if source is None:
             raise RuntimeError(self.source_prompt())
@@ -188,7 +205,7 @@ class CaptionPreview(tk.Canvas):
         self.caption = self.make_text(CAPTION_SAMPLE, self.text_font, theme.CAPTION_TEXT, "caption")
         self.original = self.make_text(CAPTION_SAMPLE_ORIGINAL, self.original_font, theme.CAPTION_PREVIOUS, "original")
         self.background_mode = appearance.background
-        self.bilingual = appearance.bilingual
+        self.caption_mode = appearance.caption_mode
         self.bind("<Configure>", self.redraw)
 
     def make_text(self, text, text_font, color, tag):
@@ -203,18 +220,20 @@ class CaptionPreview(tk.Canvas):
         self.text_font.configure(size=appearance.caption_size)
         self.original_font.configure(size=theme.secondary_caption_size(appearance.caption_size))
         self.background_mode = appearance.background
-        self.bilingual = appearance.bilingual
+        self.caption_mode = appearance.caption_mode
         self.redraw()
 
     def redraw(self, _event=None):
         width, height = self.winfo_width(), self.winfo_height()
         self.coords(self.scene, width / 2, height / 2)
-        self.itemconfigure("caption", width=max(1, width - 34))
+        text = CAPTION_SAMPLE_ORIGINAL if self.caption_mode == "original" else CAPTION_SAMPLE
+        self.itemconfigure("caption", text=text, width=max(1, width - 34))
         for item, (dx, dy) in zip(self.caption, self.offsets):
             self.coords(item, width / 2 + dx, height - 15 + dy)
         left, top, right, bottom = self.bbox(self.caption[-1])
-        self.itemconfigure("original", width=max(1, width - 34), state="normal" if self.bilingual else "hidden")
-        if self.bilingual:
+        bilingual = self.caption_mode == "bilingual"
+        self.itemconfigure("original", width=max(1, width - 34), state="normal" if bilingual else "hidden")
+        if bilingual:
             for item, (dx, dy) in zip(self.original, self.offsets):
                 self.coords(item, width / 2 + dx, top - 4 + dy)
             source_left, source_top, source_right, _ = self.bbox(self.original[-1])
@@ -225,12 +244,12 @@ class CaptionPreview(tk.Canvas):
 
 class CaptionPage(ttk.Frame):
     def __init__(self, parent, appearance, scale, *, change_size, change_background, change_lock,
-                 change_bilingual, show_overlay):
+                 change_mode, toggle_overlay):
         super().__init__(parent, padding=PAGE_PADDING)
         self.columnconfigure((0, 1), weight=1, uniform="appearance")
         self.rowconfigure(1, weight=1)
         page_title(self, APPEARANCE_TITLE)
-        self.preview_button = ttk.Button(self, text="显示浮窗", style="Outline.TButton", command=show_overlay)
+        self.preview_button = ttk.Button(self, text="显示字幕", style="Outline.TButton", command=toggle_overlay)
         self.preview_button.grid(row=0, column=1, sticky="e")
         screen = ttk.Frame(self, style="Preview.TFrame", padding=4)
         screen.grid(row=1, columnspan=2, sticky="nsew", pady=(13, 11))
@@ -246,9 +265,8 @@ class CaptionPage(ttk.Frame):
         self.background_choice = segmented_choices(self, self.background, BACKGROUNDS.items(), change_background)
         self.background_choice.grid(row=3, column=1, sticky="ew", padx=(12, 0), pady=(5, 0))
         ttk.Label(self, text="字幕内容").grid(row=4, column=0, sticky="w", pady=(12, 0))
-        self.bilingual = tk.BooleanVar(master=self)
-        self.language_choice = segmented_choices(self, self.bilingual, ((False, "仅译文"), (True, "双语")),
-                                                 change_bilingual)
+        self.caption_mode = tk.StringVar(master=self)
+        self.language_choice = segmented_choices(self, self.caption_mode, CAPTION_MODES.items(), change_mode)
         self.language_choice.grid(row=5, column=0, sticky="ew", pady=(5, 0))
         self.locked = tk.BooleanVar(master=self)
         ttk.Checkbutton(self, text="锁定浮窗位置", variable=self.locked,
@@ -263,8 +281,11 @@ class CaptionPage(ttk.Frame):
         self.size.set(appearance.caption_size)
         self.background.set(appearance.background)
         self.locked.set(appearance.locked)
-        self.bilingual.set(appearance.bilingual)
+        self.caption_mode.set(appearance.caption_mode)
         self.preview.show_appearance(appearance)
+
+    def set_overlay_visible(self, visible):
+        self.preview_button.configure(text="关闭字幕" if visible else "显示字幕")
 
     def set_active(self, active):
         for button in self.language_choice.winfo_children():
@@ -272,10 +293,13 @@ class CaptionPage(ttk.Frame):
 
 
 class SettingsPage(ttk.Frame):
-    def __init__(self, parent, key_changed):
+    def __init__(self, parent, key_changed, open_shortcuts):
         super().__init__(parent, padding=PAGE_PADDING)
         self.columnconfigure(0, weight=1)
         self.notice = tk.StringVar(master=self, value="保存后由 Windows 凭据管理器保管。")
+        self.active = self.test_pending = False
+        self.test_notice = ""
+        self.test_results = SimpleQueue()
         key = os.getenv("DASHSCOPE_API_KEY", "")
         workspace = os.getenv("DASHSCOPE_WORKSPACE", "")
         if not key:
@@ -287,10 +311,20 @@ class SettingsPage(ttk.Frame):
                 self.notice.set("无法读取先前保存的配置，请手动填写 Key。")
         self.key = tk.StringVar(master=self, value=key)
         self.workspace = tk.StringVar(master=self, value=workspace)
-        self.key.trace_add("write", key_changed)
-        self.workspace.trace_add("write", key_changed)
+
+        def input_changed(*args):
+            if self.test_notice:
+                if self.notice.get() == self.test_notice:
+                    self.notice.set("配置已修改，可重新测试连接。")
+                self.test_notice = ""
+            key_changed(*args)
+
+        self.key.trace_add("write", input_changed)
+        self.workspace.trace_add("write", input_changed)
 
         page_title(self, "翻译服务")
+        self.shortcuts_button = ttk.Button(self, text="快捷键…", style="Outline.TButton", command=open_shortcuts)
+        self.shortcuts_button.grid(row=0, column=0, sticky="e")
         provider = ttk.Frame(self, style="Panel.TFrame", padding=SECTION_PADDING)
         provider.grid(row=1, sticky="ew", pady=SECTION_GAP)
         provider.columnconfigure(0, weight=1)
@@ -320,6 +354,8 @@ class SettingsPage(ttk.Frame):
 
         controls = ttk.Frame(self)
         controls.grid(row=2, sticky="ew", pady=(12, 0))
+        self.test_button = ttk.Button(controls, text="测试连接", style="Outline.TButton", command=self.test_connection)
+        self.test_button.pack(side="left", padx=(0, theme.SPACE))
         self.save_button = ttk.Button(controls, text="保存配置", style="Outline.TButton", command=self.save)
         self.save_button.pack(side="left")
         self.clear_button = ttk.Button(controls, text="清除配置", style="Quiet.TButton", command=self.clear)
@@ -343,8 +379,62 @@ class SettingsPage(ttk.Frame):
         return self.key.get().strip(), self.workspace.get().strip()
 
     def set_active(self, active):
+        self.active = active
         for control in (self.key_entry, self.workspace_entry, self.save_button, self.clear_button):
             control.state(["disabled"] if active else ["!disabled"])
+        self.test_button.state(["disabled"] if active or self.test_pending else ["!disabled"])
+
+    def show_test_notice(self, message):
+        self.test_notice = message
+        self.notice.set(message)
+
+    def test_connection(self):
+        if self.active or self.test_pending:
+            return
+        key, workspace = self.configuration()
+        if not key:
+            self.show_test_notice(KEY_HINT)
+            self.key_entry.focus_set()
+            return
+        if not key.isascii() or not key.isprintable() or " " in key:
+            self.show_test_notice("API Key 包含空格或无效字符，请重新复制。")
+            self.key_entry.focus_set()
+            return
+        try:
+            service_url(workspace)
+        except ValueError as exc:
+            self.show_advanced(True)
+            self.show_test_notice(str(exc))
+            self.workspace_entry.focus_set()
+            return
+
+        self.test_pending = True
+        self.test_button.state(["disabled"])
+        self.show_test_notice("正在测试实时字幕连接…")
+        worker = Thread(target=self.run_connection_test, args=(key, workspace), daemon=True)
+        try:
+            worker.start()
+        except RuntimeError:
+            self.test_results.put("无法开始连接测试，请重试。")
+        self.after(50, self.receive_connection_test)
+
+    def run_connection_test(self, key, workspace):
+        try:
+            status = asyncio.run(test_subtitle_connection(key, workspace))
+        except Exception:
+            status = "连接测试未完成，请重试。"
+        self.test_results.put(status)
+
+    def receive_connection_test(self):
+        try:
+            status = self.test_results.get_nowait()
+        except Empty:
+            self.after(50, self.receive_connection_test)
+            return
+        self.test_pending = False
+        self.test_button.state(["disabled"] if self.active else ["!disabled"])
+        if self.test_notice and self.notice.get() == self.test_notice:
+            self.show_test_notice(status)
 
     def save(self):
         key, workspace = self.configuration()

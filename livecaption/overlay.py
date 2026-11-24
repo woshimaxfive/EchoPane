@@ -11,7 +11,7 @@ from caption_controls import CaptionControls
 from native_windows import (
     GWL_EXSTYLE, GW_OWNER, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, USER32,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, LayeredBitmap, monitor_work_area,
-    set_mouse_passthrough, set_window_owner,
+    set_mouse_passthrough, set_window_owner, window_work_area,
 )
 from surfaces import rounded_pixels
 
@@ -250,9 +250,9 @@ class CaptionOverlay(tk.Toplevel):
             self.capture_visibility = True
             return
         if self.state() == "withdrawn":
+            self.position = self.placement()[1]
+            self.schedule_watch()
             self.update_idletasks()
-            if self.window_bounds is None:
-                self.draw_watch()
             _, _, width, height = self.window_bounds
             self.geometry(f"{width}x{height}")
             self.attributes("-alpha", 0.0)
@@ -262,16 +262,18 @@ class CaptionOverlay(tk.Toplevel):
             self.attributes("-alpha", 1.0)
         self.resume_poll()
 
-    def hide(self):
+    def hide(self, *, remember=True):
         if self.capture_visibility is not None:
             self.capture_visibility = False
             return
+        if remember:
+            self.remember_position()
         self.pause_poll()
         self.withdraw()
 
     def suspend_for_capture(self):
         was_visible = self.state() != "withdrawn"
-        self.hide()
+        self.hide(remember=False)
         self.capture_visibility = was_visible
 
     def resume_after_capture(self):
@@ -283,6 +285,12 @@ class CaptionOverlay(tk.Toplevel):
     def move_to(self, position):
         self.position = position
         self.schedule_watch()
+
+    def remember_position(self):
+        if self.state() != "withdrawn" or self.capture_visibility:
+            self.finish_drag()
+            self.position = self.placement()[1]
+            self.save_position(self.position)
 
     def begin_drag(self, event):
         if self.hovered and not self.locked:
@@ -364,17 +372,16 @@ class CaptionOverlay(tk.Toplevel):
         if self.render_job is None:
             self.render_job = self.master.after_idle(self.draw_watch)
 
-    def work_area(self):
-        if self.position is None:
-            probe = (self.master.winfo_rootx(), self.master.winfo_rooty(),
-                     self.master.winfo_width(), self.master.winfo_height())
-        else:
+    def placement(self):
+        if self.position is not None:
             x, y = self.position
-            probe = (x, y - 1, 1, 1)
-        work = monitor_work_area(probe) or wintypes.RECT(0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
-        if self.position is None:
-            self.position = ((work.left + work.right) // 2, work.bottom - round(56 * self.scale))
-        return work
+            work = monitor_work_area((x, y - 1, 1, 1), nearest=False)
+            if work is not None:
+                return work, self.position
+        work = window_work_area(int(self.master.wm_frame(), 0))
+        if work is None:
+            work = wintypes.RECT(0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
+        return work, ((work.left + work.right) // 2, work.bottom - round(56 * self.scale))
 
     def fit_rows(self, tag, text, text_font, width, max_rows, *, keep_tail=False):
         line = " ".join(text.splitlines())
@@ -435,7 +442,7 @@ class CaptionOverlay(tk.Toplevel):
         if self.drag_origin is not None:
             return
 
-        work = self.work_area()
+        work, (x, bottom) = self.placement()
         inset = self.gap
         pad = self.padding
         limit = work.right - work.left - 2 * inset
@@ -467,7 +474,6 @@ class CaptionOverlay(tk.Toplevel):
         width, height = self.panel_size(width, height, limit, max(height, work.bottom - work.top - 2 * inset))
 
         screen_left, screen_right = work.left + inset, work.right - inset
-        x, bottom = self.position
         center_x = width // 2
         left = max(screen_left, min(x - center_x, screen_right - width))
         top = max(work.top + inset, min(bottom - height, work.bottom - inset - height))

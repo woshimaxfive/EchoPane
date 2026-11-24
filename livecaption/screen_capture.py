@@ -14,6 +14,11 @@ from window_frame import DWMAPI, set_window_transitions
 
 USER32.GetSystemMetrics.argtypes = (ctypes.c_int,)
 USER32.GetSystemMetrics.restype = ctypes.c_int
+MonitorEnumProc = ctypes.WINFUNCTYPE(
+    wintypes.BOOL, wintypes.HANDLE, wintypes.HDC, ctypes.POINTER(wintypes.RECT), wintypes.LPARAM,
+)
+USER32.EnumDisplayMonitors.argtypes = (wintypes.HDC, ctypes.POINTER(wintypes.RECT), MonitorEnumProc, wintypes.LPARAM)
+USER32.EnumDisplayMonitors.restype = wintypes.BOOL
 USER32.SetThreadDpiAwarenessContext.argtypes = (wintypes.HANDLE,)
 USER32.SetThreadDpiAwarenessContext.restype = wintypes.HANDLE
 USER32.GetDC.argtypes = (wintypes.HWND,)
@@ -35,6 +40,7 @@ PER_MONITOR_AWARE_V2 = -4
 COPY_SCREEN = 0x40CC0020  # SRCCOPY | CAPTUREBLT
 MIN_SIDE = 8
 MAX_PIXELS = 40_000_000
+CAPTURE_SETTLE_MS = 45
 
 
 @contextmanager
@@ -51,6 +57,21 @@ def physical_coordinates():
 def virtual_screen():
     with physical_coordinates():
         return tuple(USER32.GetSystemMetrics(metric) for metric in VIRTUAL_SCREEN_METRICS)
+
+
+def display_layout():
+    bounds = []
+
+    @MonitorEnumProc
+    def collect(_monitor, _dc, rectangle, _data):
+        area = rectangle.contents
+        bounds.append((area.left, area.top, area.right, area.bottom))
+        return True
+
+    with physical_coordinates():
+        if not USER32.EnumDisplayMonitors(None, None, collect, 0) or not bounds:
+            raise OSError("The Windows display layout is unavailable.")
+    return tuple(sorted(bounds))
 
 
 def cursor_position():
@@ -127,6 +148,7 @@ class RegionSelector(tk.Toplevel):
         self.canvas.bind("<ButtonRelease-1>", self.release)
 
     def show(self):
+        self.layout = display_layout()
         self.desktop = virtual_screen()
         left, top, width, height = self.desktop
         if width <= 0 or height <= 0:
@@ -184,14 +206,9 @@ class RegionSelector(tk.Toplevel):
         self.grab_release()
         self.withdraw()
         # Leave time for the selector to disappear from the composed desktop.
-        self.after(45, self.complete, rectangle, status)
+        self.after(CAPTURE_SETTLE_MS, self.complete, rectangle, status)
 
     def complete(self, rectangle, status):
-        pixels = None
-        if rectangle is not None:
-            try:
-                pixels = capture_region(rectangle)
-            except (OSError, MemoryError):
-                status = "无法截取选区，请重新框选。"
+        selection = (rectangle, self.layout) if rectangle is not None else None
         self.destroy()
-        self.completed(pixels, status)
+        self.completed(selection, status)

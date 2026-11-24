@@ -1,4 +1,4 @@
-"""Capture PCM only from the selected Windows process tree."""
+"""Capture PCM from a Windows process tree or the default playback device."""
 import ctypes
 import math
 import os
@@ -72,14 +72,24 @@ def pcm_level(pcm):
 
 
 class AudioSource:
-    def __init__(self, process):
-        if not process.is_running():
+    def __init__(self, process=None):
+        if process is not None and not process.is_running():
             raise RuntimeError("所选程序已关闭，请刷新声音来源。")
         self.process = process
         self.next_check = 0
-        self.tap = ProcessLoopback(process.pid)
-        if not self.tap.is_process_specific():
+        # ProcTap 1.1.1 uses the default render endpoint when PID 0 cannot
+        # be opened as a process tap. Verify the scope before starting either tap.
+        try:
+            self.tap = ProcessLoopback(0 if process is None else process.pid)
+        except RuntimeError as exc:
+            if process is None:
+                raise RuntimeError("无法打开 Windows 默认播放设备，请确认设备可用。") from exc
+            raise
+        isolated = self.tap.is_process_specific()
+        if process is not None and not isolated:
             raise RuntimeError("当前系统无法隔离此程序的声音。")
+        if process is None and isolated:
+            raise RuntimeError("无法打开 Windows 默认播放设备，请确认设备可用。")
         fmt = self.tap.get_format()
         self.channels = fmt["channels"]
         types = {16: "<i2", 32: "<f4"}
@@ -98,7 +108,7 @@ class AudioSource:
 
     def read(self, last=False):
         now = time.monotonic()
-        if not last and now >= self.next_check:
+        if self.process is not None and not last and now >= self.next_check:
             if not self.process.is_running():
                 raise RuntimeError("声音来源已关闭。")
             self.next_check = now + 0.5

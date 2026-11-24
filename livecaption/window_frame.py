@@ -1,9 +1,10 @@
-"""Extend the main window's client area into its Windows caption."""
+"""Remember window positions and extend the main window into its Windows caption."""
 
 import ctypes
 from ctypes import wintypes
 
-from native_windows import SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, USER32
+from native_windows import SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, USER32, monitor_work_area, window_work_area
+from preferences import load_window_position, save_window_position
 
 
 WM_NCCALCSIZE = 0x0083
@@ -15,6 +16,7 @@ SWP_FRAMECHANGED = 0x0020
 DWMWA_BORDER_COLOR = 34
 DWMWA_COLOR_NONE = 0xFFFFFFFE
 DWMWA_TRANSITIONS_FORCEDISABLED = 3
+POSITION_SAVE_DELAY_MS = 350
 
 SubclassProc = ctypes.WINFUNCTYPE(
     ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, ctypes.c_size_t,
@@ -33,6 +35,10 @@ USER32.ScreenToClient.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.POINT))
 USER32.ScreenToClient.restype = wintypes.BOOL
 USER32.IsZoomed.argtypes = (wintypes.HWND,)
 USER32.IsZoomed.restype = wintypes.BOOL
+USER32.IsIconic.argtypes = (wintypes.HWND,)
+USER32.IsIconic.restype = wintypes.BOOL
+USER32.IsWindowVisible.argtypes = (wintypes.HWND,)
+USER32.IsWindowVisible.restype = wintypes.BOOL
 DWMAPI = ctypes.WinDLL("dwmapi")
 DWMAPI.DwmSetWindowAttribute.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
 DWMAPI.DwmSetWindowAttribute.restype = wintypes.LONG
@@ -42,6 +48,83 @@ def set_window_transitions(window, *, disabled):
     flag = wintypes.BOOL(disabled)
     DWMAPI.DwmSetWindowAttribute(int(window.wm_frame(), 0), DWMWA_TRANSITIONS_FORCEDISABLED,
                                  ctypes.byref(flag), ctypes.sizeof(flag))
+
+
+class WindowPosition:
+    """Restore a window before it is shown and remember its last normal position."""
+
+    def __init__(self, window, name):
+        self.window = window
+        self.name = name
+        self.saved = load_window_position(name)
+        self.timer = None
+        window.update_idletasks()
+        self.frame = int(window.wm_frame(), 0)
+        self.restore()
+        self.position = self.current_position()
+        window.bind("<Map>", self.track, add="+")
+        window.bind("<Configure>", self.track, add="+")
+        window.bind("<Destroy>", self.finish, add="+")
+
+    def restore(self):
+        bounds = wintypes.RECT()
+        if not USER32.GetWindowRect(self.frame, ctypes.byref(bounds)):
+            return
+        width, height = bounds.right - bounds.left, bounds.bottom - bounds.top
+        work = None
+        if self.saved is not None:
+            x, y = self.saved
+            work = monitor_work_area((x, y, width, height), nearest=False)
+        if work is None:
+            owner = self.window.master
+            work = window_work_area(int(owner.wm_frame(), 0)) if owner is not None else monitor_work_area((0, 0, 1, 1))
+            if work is None:
+                return
+            x = (work.left + work.right - width) // 2
+            y = (work.top + work.bottom - height) // 2
+        x = max(work.left, min(x, work.right - width))
+        y = max(work.top, min(y, work.bottom - height))
+        USER32.SetWindowPos(self.frame, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+
+    def current_position(self):
+        if not USER32.IsWindowVisible(self.frame) or USER32.IsIconic(self.frame) or USER32.IsZoomed(self.frame):
+            return None
+        bounds = wintypes.RECT()
+        if USER32.GetWindowRect(self.frame, ctypes.byref(bounds)):
+            return bounds.left, bounds.top
+        return None
+
+    def track(self, event):
+        if event.widget is not self.window:
+            return
+        position = self.current_position()
+        if position is None or position == self.position:
+            return
+        first_map = self.position is None
+        self.position = position
+        self.cancel_save()
+        if not first_map and position != self.saved:
+            self.timer = self.window.after(POSITION_SAVE_DELAY_MS, self.save)
+
+    def cancel_save(self):
+        if self.timer is not None:
+            self.window.after_cancel(self.timer)
+            self.timer = None
+
+    def save(self):
+        self.cancel_save()
+        self.position = self.current_position() or self.position
+        if self.position is None or self.position == self.saved:
+            return
+        try:
+            save_window_position(self.name, self.position)
+        except OSError:
+            return
+        self.saved = self.position
+
+    def finish(self, event):
+        if event.widget is self.window:
+            self.save()
 
 
 class WindowFrame:

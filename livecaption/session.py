@@ -19,7 +19,7 @@ from usage import UsageRecord
 
 AUDIO_LEVEL_THRESHOLD = 0.03
 FIRST_CAPTION_QUIET_SECONDS = 8
-WAITING_FOR_AUDIO = "已连接。请确认所选窗口正在播放声音。"
+WAITING_FOR_AUDIO = "已连接。等待所选音源发声。"
 
 
 class Phase(Enum):
@@ -28,6 +28,7 @@ class Phase(Enum):
     WAITING = "等待声音"
     LISTENING = "正在收音"
     TRANSLATING = "正在翻译"
+    RECOGNIZING = "正在识别"
     STOPPING = "正在停止"
     STOPPED = "已停止"
     INTERRUPTED = "已中断"
@@ -92,10 +93,10 @@ class LiveSession:
         self.finished_at = None
         self.last_audio_at = None
         self.captions = {}
-        self.bilingual = False
+        self.caption_mode = "translation"
         self.originals = OriginalCaptions()
 
-    def start(self, open_source, key, workspace, *, bilingual=False):
+    def start(self, open_source, key, workspace, *, caption_mode="translation"):
         if self.state.active:
             return
         record = UsageRecord(uuid4().hex, time.time(), LIVE_MODEL)
@@ -106,7 +107,7 @@ class LiveSession:
             target=self.run,
             args=(open_source, key, workspace, self.stop_flag, self.emit),
             kwargs={"usage_history": self.usage_history, "usage_start": usage_start,
-                    "bilingual": bilingual}, daemon=True,
+                    "caption_mode": caption_mode}, daemon=True,
         )
         try:
             worker.start()
@@ -118,7 +119,7 @@ class LiveSession:
             self.usage_start = usage_start
             self.finished_at = None
             self.captions.clear()
-            self.bilingual = bilingual
+            self.caption_mode = caption_mode
             self.originals = OriginalCaptions()
 
     def emit(self, kind, data):
@@ -127,7 +128,7 @@ class LiveSession:
     def stop(self):
         if self.state.active and self.state.phase is not Phase.STOPPING:
             self.stop_flag.set()
-            message = "正在取消连接…" if self.state.phase is Phase.CONNECTING else "正在接收最后一段译文…"
+            message = "正在取消连接…" if self.state.phase is Phase.CONNECTING else "正在接收最后一段字幕…"
             self.state = replace(self.state, phase=Phase.STOPPING, message=message)
 
     def reset(self):
@@ -154,7 +155,7 @@ class LiveSession:
         return {ident: caption.text for ident, caption in reversed(recent)}
 
     def latest_original(self):
-        if self.bilingual:
+        if self.caption_mode == "bilingual":
             return self.originals.text(next(reversed(self.captions), None))
 
     @property
@@ -203,7 +204,8 @@ class LiveSession:
                 if data > AUDIO_LEVEL_THRESHOLD:
                     self.last_audio_at = now
                     if phase is Phase.WAITING:
-                        phase, message = Phase.LISTENING, "已收到声音，等待首条译文。"
+                        first_caption = "原文" if self.caption_mode == "original" else "译文"
+                        phase, message = Phase.LISTENING, f"已收到声音，等待首条{first_caption}。"
                 elif (phase is Phase.LISTENING and self.last_audio_at is not None
                       and now - self.last_audio_at >= FIRST_CAPTION_QUIET_SECONDS):
                     phase, message = Phase.WAITING, WAITING_FOR_AUDIO
@@ -214,12 +216,13 @@ class LiveSession:
                     continue
                 if previous and previous.final and not data.final:
                     continue
-                if self.state.active and phase not in (Phase.STOPPING, Phase.TRANSLATING):
-                    self.state = replace(self.state, phase=Phase.TRANSLATING, message="字幕显示在桌面浮窗。")
+                caption_phase = Phase.RECOGNIZING if self.caption_mode == "original" else Phase.TRANSLATING
+                if self.state.active and phase not in (Phase.STOPPING, caption_phase):
+                    self.state = replace(self.state, phase=caption_phase, message="字幕显示在桌面浮窗。")
                 first_shown = previous.first_shown if previous else self.elapsed()
                 self.captions[data.ident] = TranscriptCaption(data.text, data.final, first_shown)
                 yield kind, data
-            elif self.bilingual and kind in ("caption_link", "original"):
+            elif self.caption_mode == "bilingual" and kind in ("caption_link", "original"):
                 changes = self.originals.link(*data) if kind == "caption_link" else self.originals.update(data)
                 for ident in changes:
                     if (caption := self.captions.get(ident)) is not None:
@@ -253,7 +256,7 @@ class LiveSession:
 
     @staticmethod
     def run(open_source, key, workspace, stop, emit, *, usage_history=None, usage_start=None,
-            bilingual=False):
+            caption_mode="translation"):
         end_event = "end"
         error = ""
         latest_usage = None
@@ -269,7 +272,7 @@ class LiveSession:
             emit(kind, data)
 
         try:
-            asyncio.run(subtitles(open_source, key, workspace, stop, forward, bilingual=bilingual))
+            asyncio.run(subtitles(open_source, key, workspace, stop, forward, caption_mode=caption_mode))
         except ContentInspectionFailed:
             end_event = "content_blocked"
             error = "百炼内容审核中断，字幕已停止。请等当前片段结束或切换音源后重新开始。"

@@ -15,6 +15,8 @@ from overlay import CaptionOverlay
 from preferences import CAPTION_SIZES, load_appearance, load_sidebar_collapsed, save_appearance, save_sidebar_collapsed
 from screen_view import ScreenPage
 from session import LiveSession, Phase
+from shortcut_settings import ShortcutSettings
+from shortcuts import GlobalShortcuts
 from transcripts import TranscriptArchive, export_transcript
 from usage import UsageHistory
 from usage_view import UsagePage
@@ -22,7 +24,7 @@ from views import (
     APPEARANCE_TITLE, CAPTION_SAMPLE, CAPTION_SAMPLE_ORIGINAL, KEY_HINT, LIVE_TITLE,
     CaptionPage, LivePage, SessionBar, SettingsPage,
 )
-from window_frame import WindowFrame, set_window_transitions
+from window_frame import WindowFrame, WindowPosition, set_window_transitions
 
 
 DEFAULT_WINDOW_SIZE = (820, 560)
@@ -36,6 +38,7 @@ class LiveCaptions:
         self.session = LiveSession(usage_history)
         self.appearance = load_appearance()
         self.history = None
+        self.shortcut_settings = None
         self.archive = TranscriptArchive()
         self.saved_sessions = {}
         self.refresh_saved_sessions()
@@ -62,14 +65,15 @@ class LiveCaptions:
         self.caption = CaptionPage(
             self.tabs, self.appearance, scale,
             change_size=self.set_caption_size, change_background=self.set_caption_background,
-            change_lock=self.set_caption_lock, change_bilingual=self.set_caption_bilingual, show_overlay=self.show_overlay,
+            change_lock=self.set_caption_lock, change_mode=self.set_caption_mode, toggle_overlay=self.toggle_overlay,
         )
         self.usage_page = UsagePage(self.tabs, usage_history, self.session.current_usage, scale,
                                     open_live=lambda: self.tabs.select(self.live),
                                     can_recall=self.can_recall, open_history=self.open_history)
-        self.settings = SettingsPage(self.tabs, self.input_changed)
+        self.settings = SettingsPage(self.tabs, self.input_changed, self.open_shortcut_settings)
         self.screen_page = ScreenPage(
-            self.tabs, hide_windows=self.hide_capture_windows, configuration=self.settings.configuration,
+            self.tabs, hide_windows=self.hide_capture_windows, show_results=self.show_screen_results,
+            configuration=self.settings.configuration,
             configure_service=lambda: self.show_input_page(self.settings, self.settings.key_entry),
         )
         for page, title, icon in (
@@ -88,12 +92,30 @@ class LiveCaptions:
             self.step_caption_size, self.position_changed,
             change_background=self.set_caption_background, change_lock=self.lock_changed,
         )
+        self.overlay.bind("<Map>", self.sync_overlay_visibility, add="+")
+        self.overlay.bind("<Unmap>", self.sync_overlay_visibility, add="+")
 
         self.tabs.bind("<<NotebookTabChanged>>", self.render_session, add="+")
         self.live.refresh()
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.update_idletasks()
         self.configure_frame()
+        WindowPosition(root, "main")
+        self.shortcuts = GlobalShortcuts(root, {
+            "overlay": self.toggle_overlay,
+            "history": self.recall_from_shortcut,
+            "screen_select": lambda: self.screen_from_shortcut(self.screen_page.select_region),
+            "screen_reuse": lambda: self.screen_from_shortcut(self.screen_page.reuse_region),
+        })
+
+    def open_shortcut_settings(self):
+        panel = self.shortcut_settings
+        if panel is None or not panel.winfo_exists():
+            self.shortcut_settings = ShortcutSettings(self.root, self.shortcuts)
+        else:
+            panel.deiconify()
+            panel.lift()
+            panel.focus_set()
 
     def configure_size(self, scale):
         screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
@@ -118,6 +140,8 @@ class LiveCaptions:
         windows = [self.root]
         if self.history_open():
             windows.append(self.history)
+        if self.shortcut_settings is not None and self.shortcut_settings.winfo_exists():
+            windows.append(self.shortcut_settings)
         visible = [(window, window.state()) for window in windows if window.winfo_ismapped()]
         self.overlay.suspend_for_capture()
         for window, _state in reversed(visible):
@@ -188,6 +212,15 @@ class LiveCaptions:
             self.root.deiconify()
         field.focus_set()
 
+    def show_screen_results(self):
+        self.show_input_page(self.screen_page, self.screen_page.original)
+        self.root.lift()
+        self.screen_page.original.focus_force()
+
+    def screen_from_shortcut(self, action):
+        if not self.closing:
+            action()
+
     def start(self):
         if self.running:
             return
@@ -205,7 +238,7 @@ class LiveCaptions:
 
         self.tabs.select(self.live)
         self.validation_message = ""
-        self.session.start(open_source, *configuration, bilingual=self.appearance.bilingual)
+        self.session.start(open_source, *configuration, caption_mode=self.appearance.caption_mode)
         if self.running:
             self.save_on_finish = False
             self.archive_notice = ""
@@ -249,6 +282,7 @@ class LiveCaptions:
         else:
             if self.save_on_finish and not self.save_current_transcript():
                 messagebox.showwarning("字幕未更新", "无法更新本场字幕，已保留上次保存的版本。", parent=self.root)
+            self.overlay.remember_position()
             self.root.destroy()
 
     def poll(self):
@@ -317,10 +351,23 @@ class LiveCaptions:
             session_id = None
         self.select_history_session(session_id)
         if session_id is None:
-            self.history.go_recent()
+            if not self.history.query.get().strip():
+                self.history.go_recent()
             if not read_ok:
                 self.history.show_notice("暂时无法读取本机保存的字幕。")
         self.history.text.focus_set()
+
+    def recall_from_shortcut(self):
+        if self.closing or self.overlay.capture_visibility is not None:
+            return
+        if self.root.state() == "iconic":
+            self.root.deiconify()
+        if self.history_open():
+            self.history.deiconify()
+            self.history.lift()
+        else:
+            self.open_history()
+        (self.history.focus_lastfor() or self.history.text).focus_force()
 
     def update_history_choices(self):
         record = self.session.transcript_record
@@ -336,6 +383,7 @@ class LiveCaptions:
             except (OSError, sqlite3.Error, ValueError, TypeError):
                 transcript = None
             if transcript is None:
+                self.history.reset({})
                 self.history.show_notice("无法读取这场字幕。")
             else:
                 entries = {index: text for index, (_, text) in enumerate(transcript.captions)}
@@ -379,11 +427,25 @@ class LiveCaptions:
         else:
             self.history.show_notice(f"已导出 {Path(filename).name}。")
 
+    def sync_overlay_visibility(self, event):
+        if event.widget is self.overlay:
+            self.caption.set_overlay_visible(self.overlay.winfo_ismapped())
+
     def show_overlay(self):
         if not self.running and not self.overlay.lines and not self.overlay.interruption:
-            original = CAPTION_SAMPLE_ORIGINAL if self.appearance.bilingual else None
-            self.overlay.reset(CAPTION_SAMPLE, original=original)
+            mode = self.appearance.caption_mode
+            sample = CAPTION_SAMPLE_ORIGINAL if mode == "original" else CAPTION_SAMPLE
+            original = CAPTION_SAMPLE_ORIGINAL if mode == "bilingual" else None
+            self.overlay.reset(sample, original=original)
         self.overlay.reveal()
+
+    def toggle_overlay(self):
+        if self.closing or self.overlay.capture_visibility is not None:
+            return
+        if self.overlay.state() == "withdrawn":
+            self.show_overlay()
+        else:
+            self.overlay.hide()
 
     def dismiss_overlay(self):
         self.overlay.hide()
@@ -402,9 +464,9 @@ class LiveCaptions:
         self.overlay.set_background(background)
         self.update_appearance(background=background)
 
-    def set_caption_bilingual(self, bilingual):
+    def set_caption_mode(self, mode):
         if not self.running:
-            self.update_appearance(bilingual=bilingual)
+            self.update_appearance(caption_mode=mode)
             if self.overlay.winfo_viewable() and not self.overlay.lines and not self.overlay.interruption:
                 self.show_overlay()
 

@@ -7,7 +7,7 @@ from tkinter import ttk
 
 import theme
 from cloud import service_host
-from screen_capture import RegionSelector
+from screen_capture import CAPTURE_SETTLE_MS, RegionSelector, capture_region, display_layout
 from screen_ocr import recognize
 from text_translation import MAX_TEXT_LENGTH, TranslationError, translate
 from views import KEY_HINT, PAGE_PADDING, page_title, wrap_label
@@ -17,18 +17,25 @@ READY_TO_CAPTURE = "选取屏幕上的文字区域。识别在本机完成，点
 
 
 class ScreenPage(ttk.Frame):
-    def __init__(self, parent, *, hide_windows, configuration, configure_service):
+    def __init__(self, parent, *, hide_windows, show_results, configuration, configure_service):
         super().__init__(parent, padding=PAGE_PADDING)
         self.hide_windows = hide_windows
+        self.show_results = show_results
         self.configuration = configuration
         self.configure_service = configure_service
         self.results = SimpleQueue()
         self.busy = False
+        self.last_selection = None
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
         page_title(self, "屏幕翻译")
-        self.select_button = ttk.Button(self, text="框选屏幕", style="Outline.TButton", command=self.select_region)
-        self.select_button.grid(row=0, column=1, sticky="e")
+        actions = ttk.Frame(self)
+        actions.grid(row=0, column=1, sticky="e")
+        self.reuse_button = ttk.Button(actions, text="复用上次选区", style="Outline.TButton",
+                                       command=self.reuse_region)
+        self.reuse_button.pack(side="left", padx=(0, 8))
+        self.select_button = ttk.Button(actions, text="框选屏幕", style="Outline.TButton", command=self.select_region)
+        self.select_button.pack(side="left")
 
         editors = ttk.Frame(self)
         editors.grid(row=1, columnspan=2, sticky="nsew", pady=(12, 9))
@@ -82,6 +89,7 @@ class ScreenPage(ttk.Frame):
     def sync_buttons(self):
         has_source = bool(self.original.get("1.0", "end-1c").strip())
         self.select_button.state(["disabled"] if self.busy else ["!disabled"])
+        self.reuse_button.state(["!disabled"] if not self.busy and self.last_selection else ["disabled"])
         self.translate_button.state(["!disabled"] if not self.busy and has_source else ["disabled"])
         self.copy_button.state(["!disabled"] if self.translation.get("1.0", "end-1c") else ["disabled"])
         self.original.configure(state="disabled" if self.busy else "normal")
@@ -98,31 +106,60 @@ class ScreenPage(ttk.Frame):
             self.clipboard_append(result)
             self.status.set("已复制译文。")
 
-    def select_region(self):
-        if self.busy:
-            return
+    def begin_capture(self):
         self.busy = True
         self.sync_buttons()
         self.settings_button.grid_remove()
-        root = self.winfo_toplevel()
-        restore = self.hide_windows()
+        return self.hide_windows()
+
+    def select_region(self):
+        if self.busy:
+            return
+        restore = self.begin_capture()
         selector = None
         try:
-            selector = RegionSelector(root, lambda pixels, status: self.region_ready(restore, pixels, status))
+            selector = RegionSelector(self.winfo_toplevel(),
+                                      lambda selection, status: self.complete_capture(restore, selection, status))
             selector.show()
         except (OSError, tk.TclError):
             if selector is not None:
                 selector.destroy()
-            self.region_ready(restore, None, "无法打开框选窗口，请重试。")
+            self.complete_capture(restore, None, "无法打开框选窗口，请重试。")
+            self.show_results()
 
-    def region_ready(self, restore, pixels, status):
-        restore()
+    def reuse_region(self):
+        if self.busy:
+            return
+        if self.last_selection is None:
+            self.show_results()
+            self.status.set("请先框选一块区域，再复用选区。")
+            return
+        restore = self.begin_capture()
+        self.after(CAPTURE_SETTLE_MS, self.complete_capture, restore, self.last_selection)
+
+    def complete_capture(self, restore, selection, status=""):
+        pixels = None
+        try:
+            if selection is not None:
+                rectangle, layout = selection
+                if layout == display_layout():
+                    pixels = capture_region(rectangle)
+                else:
+                    self.last_selection = None
+                    status = "显示器布局已变化，请重新框选。"
+        except (OSError, MemoryError):
+            status = "无法截取选区，请重新框选。"
+        finally:
+            restore()
+        if selection is not None:
+            self.show_results()
         if pixels is None:
             self.busy = False
             self.status.set(status)
             self.sync_buttons()
             self.select_button.focus_set()
             return
+        self.last_selection = selection
         self.original.configure(state="normal")
         self.original.delete("1.0", "end")
         self.original.edit_reset()
