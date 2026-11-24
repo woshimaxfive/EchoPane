@@ -17,6 +17,11 @@ from transcripts import Transcript
 from usage import UsageRecord
 
 
+AUDIO_LEVEL_THRESHOLD = 0.03
+FIRST_CAPTION_QUIET_SECONDS = 8
+WAITING_FOR_AUDIO = "已连接。请确认所选窗口正在播放声音。"
+
+
 class Phase(Enum):
     IDLE = "待开始"
     CONNECTING = "正在连接"
@@ -85,22 +90,21 @@ class LiveSession:
         self.usage_start = None
         self.usage_save_failed = False
         self.finished_at = None
+        self.last_audio_at = None
         self.captions = {}
         self.bilingual = False
         self.originals = OriginalCaptions()
-        self.microphone_level = 0.0
 
-    def start(self, open_source, key, workspace, *, bilingual=False, microphone=None):
+    def start(self, open_source, key, workspace, *, bilingual=False):
         if self.state.active:
             return
         record = UsageRecord(uuid4().hex, time.time(), LIVE_MODEL)
         usage_start = (record, time.monotonic())
         self.stop_flag = threading.Event()
         self.state = SessionState(Phase.CONNECTING, "正在连接百炼…")
-        args = (open_source, key, workspace, self.stop_flag, self.emit)
         worker = threading.Thread(
-            target=self.run if microphone is None else self.run_call,
-            args=args if microphone is None else (microphone, *args),
+            target=self.run,
+            args=(open_source, key, workspace, self.stop_flag, self.emit),
             kwargs={"usage_history": self.usage_history, "usage_start": usage_start,
                     "bilingual": bilingual}, daemon=True,
         )
@@ -116,7 +120,6 @@ class LiveSession:
             self.captions.clear()
             self.bilingual = bilingual
             self.originals = OriginalCaptions()
-            self.microphone_level = 0.0
 
     def emit(self, kind, data):
         self.events.put((kind, data))
@@ -130,7 +133,6 @@ class LiveSession:
     def reset(self):
         if not self.state.active:
             self.state = SessionState()
-            self.microphone_level = 0.0
 
     def transcript(self):
         return {ident: self.caption_text(ident) for ident in self.captions}
@@ -193,14 +195,19 @@ class LiveSession:
 
             phase = self.state.phase
             if kind == "status" and phase is Phase.CONNECTING:
-                self.state = replace(self.state, phase=Phase.WAITING, message=data)
+                self.last_audio_at = None
+                self.state = replace(self.state, phase=Phase.WAITING, message=WAITING_FOR_AUDIO)
             elif kind == "level" and phase is not Phase.STOPPING:
-                next_phase = Phase.LISTENING if phase is Phase.WAITING and data > 0.03 else phase
-                self.state = replace(self.state, phase=next_phase, level=data)
-            elif kind == "microphone_level" and phase is not Phase.STOPPING:
-                self.microphone_level = data
-                if phase is Phase.WAITING and data > 0.03:
-                    self.state = replace(self.state, phase=Phase.LISTENING)
+                now = time.monotonic()
+                message = self.state.message
+                if data > AUDIO_LEVEL_THRESHOLD:
+                    self.last_audio_at = now
+                    if phase is Phase.WAITING:
+                        phase, message = Phase.LISTENING, "已收到声音，等待首条译文。"
+                elif (phase is Phase.LISTENING and self.last_audio_at is not None
+                      and now - self.last_audio_at >= FIRST_CAPTION_QUIET_SECONDS):
+                    phase, message = Phase.WAITING, WAITING_FOR_AUDIO
+                self.state = replace(self.state, phase=phase, message=message, level=data)
             elif kind == "caption":
                 previous = self.captions.get(data.ident)
                 if previous and previous.text == data.text and previous.final == data.final:
@@ -232,69 +239,7 @@ class LiveSession:
                     message += " 本次用量保存失败。"
                 self.finished_at = time.monotonic()
                 self.state = SessionState(Phase.INTERRUPTED if data else Phase.STOPPED, message)
-                self.microphone_level = 0.0
                 yield kind, data
-
-    @staticmethod
-    def run_call(microphone, open_source, key, workspace, stop, emit, *,
-                 usage_history=None, usage_start=None, bilingual=False):
-        events = queue.SimpleQueue()
-        workers = []
-        for speaker, source, originals in (("对方", open_source, bilingual), ("我方", microphone, True)):
-            def forward(kind, data, speaker=speaker):
-                events.put((speaker, kind, data))
-
-            worker = threading.Thread(target=LiveSession.run, args=(source, key, workspace, stop, forward),
-                                      kwargs={"bilingual": originals}, daemon=True)
-            try:
-                worker.start()
-            except RuntimeError:
-                stop.set()
-                forward("end", "无法开始采音，请重试。")
-            else:
-                workers.append(worker)
-
-        pending = 2
-        capturing = False
-        reported_usage = {}
-        total = None
-        end_event, error = "end", ""
-        while pending:
-            speaker, kind, data = events.get()
-            if kind in ("end", "content_blocked"):
-                pending -= 1
-                if data:
-                    stop.set()
-                    if not error or kind == "content_blocked":
-                        end_event, error = kind, f"{speaker}：{data}"
-            elif kind == "status":
-                capturing = True
-                emit(kind, "正在采集通话声音，字幕显示在桌面浮窗。")
-            elif kind == "usage":
-                reported_usage[speaker] = data
-                if len(reported_usage) == 2:
-                    first, second = reported_usage.values()
-                    total = (first[0] + second[0], first[1] + second[1])
-                    emit(kind, total)
-            else:
-                LiveSession.forward_call_caption(speaker, kind, data, emit)
-        for worker in workers:
-            worker.join()
-        if capturing or reported_usage:
-            LiveSession.save_usage(usage_history, usage_start, total, error, emit)
-        emit(end_event, error)
-
-    @staticmethod
-    def forward_call_caption(speaker, kind, data, emit):
-        prefix = f"{speaker}:"
-        if kind == "level":
-            emit("microphone_level" if speaker == "我方" else kind, data)
-        elif (speaker, kind) in (("我方", "original"), ("对方", "caption")) and data.text:
-            emit("caption", CaptionUpdate(prefix + data.ident, f"{speaker} · {data.text}", data.final))
-        elif speaker == "对方" and kind == "original":
-            emit(kind, data._replace(ident=prefix + data.ident))
-        elif speaker == "对方" and kind == "caption_link":
-            emit(kind, (prefix + data[0], prefix + data[1]))
 
     @staticmethod
     def save_usage(usage_history, usage_start, tokens, error, emit):
@@ -308,7 +253,7 @@ class LiveSession:
 
     @staticmethod
     def run(open_source, key, workspace, stop, emit, *, usage_history=None, usage_start=None,
-            bilingual=False, voice_language=None):
+            bilingual=False):
         end_event = "end"
         error = ""
         latest_usage = None
@@ -324,14 +269,10 @@ class LiveSession:
             emit(kind, data)
 
         try:
-            options = {"bilingual": bilingual}
-            if voice_language is not None:
-                options["voice_language"] = voice_language
-            asyncio.run(subtitles(open_source, key, workspace, stop, forward, **options))
+            asyncio.run(subtitles(open_source, key, workspace, stop, forward, bilingual=bilingual))
         except ContentInspectionFailed:
             end_event = "content_blocked"
-            error = ("百炼内容审核中断，请换一句重试。" if voice_language is not None else
-                     "百炼内容审核中断，字幕已停止。请等当前片段结束或切换音源后重新开始。")
+            error = "百炼内容审核中断，字幕已停止。请等当前片段结束或切换音源后重新开始。"
         except InvalidStatus as exc:
             error = f"连接被拒绝（HTTP {exc.response.status_code}），请检查北京地域 Key、业务空间或网络。"
         except ConnectionClosed:
