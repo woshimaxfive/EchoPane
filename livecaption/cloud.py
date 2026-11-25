@@ -68,7 +68,7 @@ def subtitle_connection(key, workspace):
                    open_timeout=8, close_timeout=2, max_size=2**20)
 
 
-async def configure_subtitles(ws, caption_mode):
+async def configure_subtitles(ws, caption_mode, *, terms=()):
     options = {
         "modalities": ["text"], "translation": {"language": "zh"},
         "input_audio_format": "pcm", "sample_rate": 16000,
@@ -76,7 +76,9 @@ async def configure_subtitles(ws, caption_mode):
             "model": "qwen3-asr-flash-realtime" if caption_mode != "translation" else None,
         },
     }
-    await ws.send(json.dumps({"type": "session.update", "session": options}))
+    if terms and caption_mode != "original":
+        options["translation"]["corpus"] = {"phrases": dict(terms)}
+    await ws.send(json.dumps({"type": "session.update", "session": options}, ensure_ascii=False))
     await expect(ws, "session.updated")
 
 
@@ -123,7 +125,7 @@ async def test_subtitle_connection(key, workspace):
     return "连接成功，百炼已接受实时字幕配置。"
 
 
-async def subtitles(open_source, key, workspace, stop, emit, *, caption_mode="translation"):
+async def subtitles(open_source, key, workspace, stop, emit, *, caption_mode="translation", terms=()):
     ready = False
 
     async def run_session():
@@ -132,7 +134,7 @@ async def subtitles(open_source, key, workspace, stop, emit, *, caption_mode="tr
             await expect(ws, "session.created")
             if stop.is_set():
                 return
-            await configure_subtitles(ws, caption_mode)
+            await configure_subtitles(ws, caption_mode, terms=terms)
             if stop.is_set():
                 return
             ready = True

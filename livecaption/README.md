@@ -52,9 +52,60 @@ EchoPane 运行时，可在播放器等其他窗口中按 `Ctrl+Alt+F6` 开始�
 
 点击「翻译」后，EchoPane 用设置页的 Key 和业务空间向阿里云百炼 Qwen-MT 发送确认过的文字。译文为简体中文，可以选中或点击「复制」。截图留在本机内存，软件退出后清空本页文本。文本翻译用量可在百炼账单中查看，EchoPane 的「用量」页统计实时字幕会话。 [百炼 Qwen-MT 接口](https://help.aliyun.com/zh/model-studio/qwen-mt-api)
 
+## 字幕文件翻译
+
+1. 打开「字幕文件」，导入 SRT 或 WebVTT。页面显示可翻译的段数和第一段预览。读取失败时可将文件另存为 UTF-8 后再导入。
+2. 点击「开始翻译」。字幕正文逐段发送给百炼，同一文件内重复的正文共用译文。位置、时间码和文件信息在本机处理。
+3. 可点击「取消」。当前请求结束后停止，已完成的译文留在当前窗口。遇到请求错误时可重试，接着翻译还未完成的段落。
+4. 完成后可「导出译文」或「导出双语」。另存的文件使用 UTF-8 和原时间轴，双语文件在每段原文后附上译文。WebVTT 的字幕编号和位置设置一并保留。
+
+## 网页已有字幕
+
+1. 打开 EchoPane 的「网页字幕」，点击「打开扩展目录」。在 Chrome 或 Edge 的扩展管理页开启开发者模式，点击「加载已解压的扩展」，选择 `browser_extension`。这一步每个浏览器配置做一次。安装新版本后可在扩展管理页重新加载该扩展。 [Chrome 加载步骤](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked) [Edge 加载步骤](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading)
+2. 打开视频，在播放器里选中一条字幕轨。在 EchoPane 点击「开启连接」和「复制连接码」，再在视频标签页点开 EchoPane 扩展，粘贴并点击「连接当前标签页」。译文出现在桌面浮窗，随当前播放位置和所选字幕轨更新。换视频标签页时，先断开再复制新连接码。
+3. 支持网页顶层 HTML5 视频通过浏览器标准接口提供并开启的字幕轨。如果播放器自行绘制字幕、视频位于跨站嵌入框或视频本身没有字幕，点击「使用播放声音转字幕」，再选音源开始。 [HTML 文本轨接口](https://html.spec.whatwg.org/multipage/media.html#text-track-api)
+
+「字幕外观」的字幕内容、字号和背景也用于网页字幕。选择仅原文时可以直接在浮窗阅读。选择译文或双语时，EchoPane 按播放进度用现有 Key 把字幕正文发往百炼，并在本次连接中缓存译文。扩展和桌面端通过本机回环连接传递字幕及播放状态。文件和网页的文本翻译用量可在自己的百炼账单中查看。
+
+## 术语词表
+
+在「设置 → 术语词表」填写原文和指定译法，再点「添加术语」。点中已有词条可修改或删除。词表保存在 `%LOCALAPPDATA%\EchoPane\glossary.json`，可保存 100 条，原文和译法各限 80 个字符。
+
+屏幕翻译、字幕文件、网页字幕和本地视频的文本翻译每次请求最多向百炼附带 20 条在原文中命中的术语。实时字幕在开始翻译时会提交整份词表。仅原文模式无需提交词条。词表为模型提供译法参考，实际结果取决于语音识别和翻译。 [百炼文本翻译术语参数](https://help.aliyun.com/zh/model-studio/qwen-mt-api) [百炼实时翻译热词](https://help.aliyun.com/zh/model-studio/qwen3-5-livetranslate-flash-realtime)
+
+屏幕翻译的下一次请求会使用新词表。字幕文件取消后继续或重试时沿用该文件开始翻译时的词表。要改用新词表，可重新导入文件、重新连接网页字幕或重新开始一场实时字幕。
+
+## 本地视频生成字幕
+
+1. 打开「视频字幕」，点「导入视频…」选本机媒体文件。支持常见编码的 MP4、MOV、MKV、WebM、AVI 和 WMV，也可选择 M4A、WAV 或 MP3。多音轨文件会读取第一条音轨。
+2. 点击「生成原文」。随安装包提供的 FFmpeg 在本机按视频的时间轴提取音轨，EchoPane 分段把音频发送给百炼 Fun-ASR-Flash。进度按已经转写的音频位置更新。图片和视频画面留在本机。 [Fun-ASR-Flash 接口](https://help.aliyun.com/zh/model-studio/fun-asr-flash-recorded-speech-recognition-http-api)
+3. 转写完成后可「导出原文」。需要中文字幕时点「翻译为双语」，沿用设置中的术语词表。再点「导出双语」，选 SRT 或 WebVTT。把导出的文件加载到原视频的播放器中，原文与译文共用同一时码。
+4. 点击「取消」后等当前请求返回。当前窗口会保留已完成的片段，接着点「继续生成」或「继续翻译」。换文件或退出后需重新开始。无可读音轨、解码失败和服务请求错误会在页面提示。
+
+转写按提交的音频时长计量，分段交接处包含少量重叠。双语另计文本翻译用量，金额以自己的百炼账单为准。EchoPane 的「用量」页统计实时字幕会话。 [百炼计费](https://help.aliyun.com/zh/model-studio/model-pricing)
+
+## 本地原文字幕
+
+1. 打开「实时字幕」，把「处理方式」切到「本地原文」。点击「下载模型」优先从魔搭获取 SenseVoiceSmall INT8 和词表，暂停后可再次点击继续下载。语音检测文件随安装包提供。已有模型文件通过校验后直接复用。
+2. 选择播放窗口或全系统声音，点击「开始字幕」。模型就绪后在 CPU 上识别，可断网使用，无需 API Key。输出原文沿用现有浮窗、回看、保存本场和导出。
+3. 需要实时译文或双语时，将「处理方式」切到「云端字幕」，再开始新一场。应用记住上次选择。文件损坏时可用「校验或修复」重新获取对应文件。
+
+已取得 EchoPane 的 ZIP 模型包时，在「本地原文」点「导入模型包」并选择 ZIP。三个文件通过大小和 SHA-256 校验后安装到当前用户的模型目录，导入过程可断网完成。
+
+本地模式按语音段出字幕，声音重叠、人名和数字的识别会受素材质量影响。模型自动识别普通话、粤语、英语、日语和韩语。 [模型说明及支持语言](https://k2-fsa.github.io/sherpa/onnx/sense-voice/)
+
+需要构建配套模型包时，把已经通过校验的模型目录传给 `build_model_package.py`。从仓库根目录运行以下命令可将本机模型打成单独的 ZIP。
+
+```powershell
+python -B livecaption/build_model_package.py "$env:LOCALAPPDATA\EchoPane\models\sensevoice-int8-2024-07-17" `
+    '.local/windows-package/EchoPane-SenseVoiceSmall-int8-2024-07-17.zip'
+```
+
 ## 从源码运行
 
 双击 `start.cmd`。需要 Python 3.12 x64（含 Tk），首次启动会在仓库的 `.local` 目录安装依赖。若提供了 `DASHSCOPE_API_KEY`，启动时使用该环境变量和对应的 `DASHSCOPE_WORKSPACE`。
+
+从源码运行「视频字幕」时，按下面的构建步骤准备仓库内的解码器，或把 `ECHOPANE_FFMPEG_DIR` 指向已安装的 `ffmpeg.exe` 和 `ffprobe.exe` 所在目录。
 
 ## 界面结构
 
@@ -64,9 +115,19 @@ EchoPane 运行时，可在播放器等其他窗口中按 `Ctrl+Alt+F6` 开始�
 
 `screen_view.py` 管理屏幕翻译页面，`screen_capture.py` 负责 Windows 框选和截图，`screen_ocr.py` 调用本机模型，`text_translation.py` 发送确认后的文本。
 
+`subtitle_view.py` 管理字幕文件页面和翻译进度，`subtitle_file.py` 负责格式导入与导出。页面通过 `text_translation.py` 复用现有的百炼连接。
+
+`browser_extension` 负责读取授权标签页的字幕状态。`web_caption.py` 验证浏览器来源和一次性连接码，`web_caption_view.py` 跟随当前字幕更新桌面浮窗，复用现有文本翻译服务。
+
+`glossary.py` 负责本机词表和文本匹配，`glossary_settings.py` 负责词表编辑窗口。文本翻译与实时字幕各自使用百炼对应的术语接口。
+
+`video_view.py` 管理视频字幕的两阶段任务，`video_audio.py` 从 FFmpeg 的本机管道读取音轨，`video_asr.py` 调用转写接口，`video_captions.py` 根据逐词时间码生成字幕并共用格式库导出。
+
+`offline_model.py` 管理模型获取和校验，`offline_speech.py` 将本地识别结果转成现有字幕事件。打包版的本地识别和屏幕 OCR 共用一份 ONNX Runtime。
+
 ## 构建 Windows 安装包
 
-在仓库根目录使用带 Tk 的 Python 3.14.10 x64 创建构建环境。构建时会校验 SoXR 与 GEOS 对应源码包以及 RapidOCR 模型的 SHA-256，并将它们放入安装包。
+在仓库根目录使用带 Tk 的 Python 3.14.10 x64 创建构建环境。构建时会校验 SoXR、GEOS、FFmpeg 对应源码包以及 RapidOCR 模型的 SHA-256，并将它们放入安装包。
 
 ```powershell
 py -3.14 -m venv .local/release-build
@@ -81,8 +142,17 @@ $geosSource = '.local/windows-build/sources/geos-3.14.1.tar.bz2'
 if (!(Test-Path -LiteralPath $geosSource)) {
     Invoke-WebRequest -Uri 'https://download.osgeo.org/geos/geos-3.14.1.tar.bz2' -OutFile $geosSource
 }
+$ffmpegSource = '.local/windows-build/sources/ffmpeg-9.1.tar.xz'
+if (!(Test-Path -LiteralPath $ffmpegSource)) {
+    Invoke-WebRequest -Uri 'https://ffmpeg.org/releases/ffmpeg-9.1.tar.xz' -OutFile $ffmpegSource
+}
+```
+
+在仓库根目录的 MSYS2 UCRT64 终端安装 `mingw-w64-ucrt-x86_64-gcc`、`make`、`diffutils` 和 `xz`，然后运行 `bash livecaption/build_ffmpeg.sh`。脚本校验源码包并构建音频解码用的 `ffmpeg.exe` 和 `ffprobe.exe`。回到刚创建构建环境的 PowerShell 运行下面两行。 [MSYS2 UCRT64](https://www.msys2.org/docs/environments/) [FFmpeg 源码发布](https://ffmpeg.org/download.html#release_9.1)
+
+```powershell
 & $buildPython -B livecaption/build_windows.py bdist_msi
-Get-FileHash -Algorithm SHA256 .local/windows-package/EchoPane-0.2.31-win-x64.msi
+Get-FileHash -Algorithm SHA256 .local/windows-package/EchoPane-0.2.35-win-x64.msi
 ```
 
 生成的 x64 MSI 位于 `.local/windows-package/`。双击安装后，可从开始菜单打开 EchoPane。同一 Windows 用户下升级时，会沿用该用户的字幕外观与已保存的百炼凭据。

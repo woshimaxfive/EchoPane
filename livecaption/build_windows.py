@@ -10,16 +10,18 @@ from cx_Freeze import Executable, setup
 from cx_Freeze.command.build_exe import build_exe
 from freeze_core.winmsvcr import MSVC_FILES
 
+from offline_model import SILERO_VAD, matches
 from screen_ocr import MODEL_HASHES
 
 
 SOURCE = Path(__file__).resolve().parent
 LOCAL = SOURCE.parent / ".local"
 BUILD_DIR = LOCAL / "windows-build"
-VERSION = "0.2.31"
+VERSION = "0.2.37"
 LIBRARY_SOURCES = (
     ("soxr", "soxr-1.1.0.tar.gz", "9f228ae21c78fa9359ca98d8a5e8e91f30639e438e574133dace62c5b5309e44"),
     ("shapely", "geos-3.14.1.tar.bz2", "3c20919cda9a505db07b5216baa980bacdaa0702da715b43f176fb07eff7e716"),
+    ("ffmpeg", "ffmpeg-9.1.tar.xz", "1a4d394ae63d190a526cd052eb4415c156b5c5e2df37efab41a7de0b8fde2433"),
 )
 VC_RUNTIME_FILES = (
     ("ECHOPANE_MSVC_CPP", "msvcp140.dll"),
@@ -47,6 +49,14 @@ class BuildWithSystemRuntime(build_exe):
         # OCR processes still images. The OpenCV video plug-in is not part of this payload.
         for plugin in payload.rglob("opencv_videoio_ffmpeg*.dll"):
             plugin.unlink()
+        # Keep the ONNX Runtime used by OCR and the offline speech binding.
+        runtime = payload / "lib/onnxruntime/capi/onnxruntime.dll"
+        upstream = distribution("onnxruntime").locate_file("onnxruntime/capi/onnxruntime.dll")
+        if not runtime.is_file() or runtime.read_bytes() != upstream.read_bytes():
+            raise RuntimeError("安装包缺少与项目依赖一致的 ONNX Runtime。")
+        for duplicate in payload.rglob("onnxruntime.dll"):
+            if duplicate != runtime:
+                duplicate.unlink()
         unexpected = [file.name for file in payload.rglob("*.dll")
                       if file.name.lower() in MSVC_FILES or file.name.lower().startswith(("msvcp140-", "vcruntime140-"))]
         if unexpected:
@@ -137,6 +147,24 @@ def ocr_files():
     return files
 
 
+def video_decoder_files():
+    directory = BUILD_DIR / "ffmpeg"
+    files = [
+        (directory / "ffmpeg.exe", "ffmpeg/ffmpeg.exe"),
+        (directory / "ffprobe.exe", "ffmpeg/ffprobe.exe"),
+        (directory / "COPYING.LGPLv2.1", "licenses/ffmpeg/COPYING.LGPLv2.1"),
+        (SOURCE / "build_ffmpeg.sh", "licenses/ffmpeg/source/build_ffmpeg.sh"),
+    ]
+    notices = directory / "compiler-notices"
+    if not all(path.is_file() for path, _ in files) or not (notices / "gcc-libs/COPYING.RUNTIME").is_file():
+        raise RuntimeError("缺少 FFmpeg 解码组件，请按 livecaption/README.md 运行 build_ffmpeg.sh。")
+    files.append((notices, "licenses/ffmpeg/compiler-notices"))
+    return files
+
+
+name, _, size, digest = SILERO_VAD
+if not matches(SOURCE / "assets" / name, size, digest):
+    raise RuntimeError("随包提供的 Silero VAD 文件校验失败。")
 BUILD_DIR.mkdir(parents=True, exist_ok=True)
 
 setup(
@@ -160,7 +188,9 @@ setup(
             "include_msvcr": False,
             "includes": ["rapidocr.inference_engine.onnxruntime.main"],
             "include_files": [
-                (SOURCE / "README.md", "README.md"), (SOURCE / "assets", "assets"), *license_files(), *ocr_files(),
+                (SOURCE / "README.md", "README.md"), (SOURCE / "assets", "assets"),
+                (SOURCE / "browser_extension", "browser_extension"), *license_files(), *ocr_files(),
+                *video_decoder_files(),
             ],
             "replace_paths": [("*", ".")],
         },

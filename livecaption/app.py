@@ -9,17 +9,23 @@ from tkinter import filedialog, messagebox, ttk
 
 import theme
 from cloud import service_url
+from glossary import load_glossary, save_glossary
+from glossary_settings import GlossarySettings
 from history import CaptionHistory
 from native_windows import monitor_work_area
+from offline_model import model_ready
 from overlay import CaptionOverlay
 from preferences import CAPTION_SIZES, load_appearance, load_sidebar_collapsed, save_appearance, save_sidebar_collapsed
 from screen_view import ScreenPage
 from session import LiveSession, Phase
 from shortcut_settings import ShortcutSettings
 from shortcuts import GlobalShortcuts
+from subtitle_view import SubtitlePage
 from transcripts import TranscriptArchive, export_transcript
 from usage import UsageHistory
 from usage_view import UsagePage
+from video_view import VideoPage
+from web_caption_view import WebCaptionPage
 from views import (
     APPEARANCE_TITLE, CAPTION_SAMPLE, CAPTION_SAMPLE_ORIGINAL, KEY_HINT, LIVE_TITLE,
     CaptionPage, LivePage, SessionBar, SettingsPage,
@@ -39,6 +45,8 @@ class LiveCaptions:
         self.appearance = load_appearance()
         self.history = None
         self.shortcut_settings = None
+        self.glossary_settings = None
+        self.terms = load_glossary()
         self.archive = TranscriptArchive()
         self.saved_sessions = {}
         self.refresh_saved_sessions()
@@ -70,15 +78,29 @@ class LiveCaptions:
         self.usage_page = UsagePage(self.tabs, usage_history, self.session.current_usage, scale,
                                     open_live=lambda: self.tabs.select(self.live),
                                     can_recall=self.can_recall, open_history=self.open_history)
-        self.settings = SettingsPage(self.tabs, self.input_changed, self.open_shortcut_settings)
+        self.settings = SettingsPage(self.tabs, self.input_changed, self.open_shortcut_settings, self.open_glossary)
+        configure_text_service = lambda: self.show_input_page(self.settings, self.settings.key_entry)
+        glossary = lambda: self.terms
         self.screen_page = ScreenPage(
             self.tabs, hide_windows=self.hide_capture_windows, show_results=self.show_screen_results,
-            configuration=self.settings.configuration,
-            configure_service=lambda: self.show_input_page(self.settings, self.settings.key_entry),
+            configuration=self.settings.configuration, configure_service=configure_text_service, glossary=glossary,
+        )
+        self.subtitle_page = SubtitlePage(
+            self.tabs, configuration=self.settings.configuration, configure_service=configure_text_service, glossary=glossary,
+        )
+        self.video_page = VideoPage(
+            self.tabs, configuration=self.settings.configuration, configure_service=configure_text_service, glossary=glossary,
+        )
+        self.web_page = WebCaptionPage(
+            self.tabs, configuration=self.service_configuration, can_start=lambda: not self.running,
+            caption_mode=lambda: self.appearance.caption_mode, set_active=self.set_web_caption_active,
+            show_caption=self.show_web_caption, open_audio=self.open_audio_captions, glossary=glossary,
         )
         for page, title, icon in (
             (self.live, LIVE_TITLE, "live"), (self.caption, APPEARANCE_TITLE, "captions"),
-            (self.screen_page, "屏幕翻译", "screen"),
+            (self.web_page, "网页字幕", "web_caption"),
+            (self.screen_page, "屏幕翻译", "screen"), (self.subtitle_page, "字幕文件", "subtitle_file"),
+            (self.video_page, "视频字幕", "video"),
             (self.usage_page, "用量", "usage"), (self.settings, "设置", "settings"),
         ):
             self.tabs.add_page(page, title, icon)
@@ -88,7 +110,7 @@ class LiveCaptions:
         self.footer = SessionBar(root, self.start, self.stop)
         self.footer.grid(row=3, column=0, sticky="ew")
         self.overlay = CaptionOverlay(
-            root, self.appearance, self.dismiss_overlay, self.stop,
+            root, self.appearance, self.dismiss_overlay, self.stop_overlay,
             self.step_caption_size, self.position_changed,
             change_background=self.set_caption_background, change_lock=self.lock_changed,
         )
@@ -117,6 +139,19 @@ class LiveCaptions:
             panel.lift()
             panel.focus_set()
 
+    def open_glossary(self):
+        panel = self.glossary_settings
+        if panel is None or not panel.winfo_exists():
+            self.glossary_settings = GlossarySettings(self.root, self.terms, self.save_terms)
+        else:
+            panel.deiconify()
+            panel.lift()
+            panel.focus_set()
+
+    def save_terms(self, terms):
+        self.terms = save_glossary(terms)
+        return self.terms
+
     def configure_size(self, scale):
         screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         work = monitor_work_area((0, 0, 1, 1))
@@ -140,8 +175,9 @@ class LiveCaptions:
         windows = [self.root]
         if self.history_open():
             windows.append(self.history)
-        if self.shortcut_settings is not None and self.shortcut_settings.winfo_exists():
-            windows.append(self.shortcut_settings)
+        for panel in (self.shortcut_settings, self.glossary_settings):
+            if panel is not None and panel.winfo_exists():
+                windows.append(panel)
         visible = [(window, window.state()) for window in windows if window.winfo_ismapped()]
         self.overlay.suspend_for_capture()
         for window, _state in reversed(visible):
@@ -200,6 +236,10 @@ class LiveCaptions:
             return
         if not self.live.input_ready():
             label, detail = "待选择音源", self.live.source_prompt()
+        elif self.live.local_selected:
+            label, detail = ("可以开始", "本地原文会显示在桌面浮窗。") if model_ready() else (
+                "待安装模型", "首次使用请下载或导入本地模型。"
+            )
         elif not self.settings.configuration()[0]:
             label, detail = "待配置", KEY_HINT
         else:
@@ -232,13 +272,26 @@ class LiveCaptions:
             self.show_input_page(self.live, self.live.source)
             self.render_session()
             return
-        configuration = self.service_configuration()
-        if configuration is None:
-            return
+        local = self.live.local_selected
+        if local:
+            if not model_ready():
+                self.session.reset()
+                self.validation_message = "请先下载或导入本地模型。"
+                self.show_input_page(self.live, self.live.model_button)
+                self.render_session()
+                return
+        else:
+            configuration = self.service_configuration()
+            if configuration is None:
+                return
 
+        self.web_page.stop()
         self.tabs.select(self.live)
         self.validation_message = ""
-        self.session.start(open_source, *configuration, caption_mode=self.appearance.caption_mode)
+        if local:
+            self.session.start(open_source, local=True)
+        else:
+            self.session.start(open_source, *configuration, caption_mode=self.appearance.caption_mode, terms=self.terms)
         if self.running:
             self.save_on_finish = False
             self.archive_notice = ""
@@ -277,8 +330,14 @@ class LiveCaptions:
 
     def close(self):
         self.closing = True
+        self.live.stop_model_task()
+        self.subtitle_page.cancel()
+        self.video_page.cancel()
+        self.web_page.stop()
         if self.running:
             self.stop()
+        elif self.live.model_stop is not None:
+            self.root.after(100, self.close)
         else:
             if self.save_on_finish and not self.save_current_transcript():
                 messagebox.showwarning("字幕未更新", "无法更新本场字幕，已保留上次保存的版本。", parent=self.root)
@@ -432,7 +491,7 @@ class LiveCaptions:
             self.caption.set_overlay_visible(self.overlay.winfo_ismapped())
 
     def show_overlay(self):
-        if not self.running and not self.overlay.lines and not self.overlay.interruption:
+        if not (self.running or self.web_page.active or self.overlay.lines or self.overlay.interruption):
             mode = self.appearance.caption_mode
             sample = CAPTION_SAMPLE_ORIGINAL if mode == "original" else CAPTION_SAMPLE
             original = CAPTION_SAMPLE_ORIGINAL if mode == "bilingual" else None
@@ -442,6 +501,8 @@ class LiveCaptions:
     def toggle_overlay(self):
         if self.closing or self.overlay.capture_visibility is not None:
             return
+        if self.web_page.active:
+            self.web_overlay_seen = True
         if self.overlay.state() == "withdrawn":
             self.show_overlay()
         else:
@@ -449,7 +510,32 @@ class LiveCaptions:
 
     def dismiss_overlay(self):
         self.overlay.hide()
-        self.stop()
+        self.stop_overlay()
+
+    def stop_overlay(self):
+        if self.web_page.active:
+            self.web_page.stop()
+        else:
+            self.stop()
+
+    def set_web_caption_active(self, active):
+        self.web_overlay_seen = self.overlay.winfo_ismapped()
+        self.caption.set_active(active)
+        self.overlay.set_active(active)
+        self.overlay.set_captions({})
+        self.overlay.reset("")
+        if not active:
+            self.overlay.hide()
+
+    def show_web_caption(self, text, original):
+        self.overlay.set_captions({"web": text} if text else {}, original=original)
+        if text and not self.web_overlay_seen:
+            self.web_overlay_seen = True
+            self.overlay.reveal()
+
+    def open_audio_captions(self):
+        self.web_page.stop()
+        self.show_input_page(self.live, self.live.source)
 
     def set_caption_size(self, size):
         self.overlay.set_size(size)
@@ -465,7 +551,7 @@ class LiveCaptions:
         self.update_appearance(background=background)
 
     def set_caption_mode(self, mode):
-        if not self.running:
+        if not (self.running or self.web_page.active):
             self.update_appearance(caption_mode=mode)
             if self.overlay.winfo_viewable() and not self.overlay.lines and not self.overlay.interruption:
                 self.show_overlay()

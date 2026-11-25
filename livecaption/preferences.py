@@ -84,6 +84,18 @@ def save_sidebar_collapsed(collapsed):
     write_preferences(path, data)
 
 
+def load_local_captions():
+    data = read_preferences(appearance_path().with_name("workspace.json"))
+    return data.get("local_captions") is True
+
+
+def save_local_captions(enabled):
+    path = appearance_path().with_name("workspace.json")
+    data = read_preferences(path)
+    data["local_captions"] = enabled
+    write_preferences(path, data)
+
+
 def load_window_position(name):
     positions = read_preferences(appearance_path().with_name("workspace.json")).get("window_positions")
     return parse_position(positions.get(name)) if isinstance(positions, dict) else None

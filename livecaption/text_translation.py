@@ -1,10 +1,11 @@
-"""Translate confirmed screen text using the existing Beijing Bailian profile."""
+"""Translate text using the existing Beijing Bailian profile."""
 
 import json
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from cloud import service_host
+from glossary import matching_terms
 
 
 TEXT_MODEL = "qwen-mt-flash"
@@ -20,15 +21,19 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def translate(text, key, workspace):
+def translate(text, key, workspace, *, terms=()):
     if not text.strip() or len(text) > MAX_TEXT_LENGTH:
         raise TranslationError(f"请输入 1 至 {MAX_TEXT_LENGTH} 个字符。")
+    options = {"source_lang": "auto", "target_lang": "Chinese"}
+    matches = matching_terms(text, terms)
+    if matches:
+        options["terms"] = matches
     request = Request(
         f"https://{service_host(workspace)}/compatible-mode/v1/chat/completions",
         data=json.dumps({
             "model": TEXT_MODEL,
             "messages": [{"role": "user", "content": text}],
-            "translation_options": {"source_lang": "auto", "target_lang": "Chinese"},
+            "translation_options": options,
         }, ensure_ascii=False).encode("utf-8"),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
     )

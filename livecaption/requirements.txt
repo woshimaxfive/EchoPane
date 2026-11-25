@@ -19,8 +19,11 @@ rapidocr==3.10.0
 requests==2.34.2
 scipy==1.18.1
 shapely==2.2.0
+sherpa-onnx==2.0.2
+sherpa-onnx-core==2.0.2
 six==1.17.0
 soxr==1.1.0
 tqdm==4.70.1
 urllib3==2.8.0
+webvtt-py==0.8.0
 websockets==16.1.1

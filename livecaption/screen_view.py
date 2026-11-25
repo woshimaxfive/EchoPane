@@ -1,6 +1,7 @@
 """One-shot capture, OCR review and text translation in the workspace."""
 
 import tkinter as tk
+from functools import partial
 from queue import Empty, SimpleQueue
 from threading import Thread
 from tkinter import ttk
@@ -17,12 +18,13 @@ READY_TO_CAPTURE = "选取屏幕上的文字区域。识别在本机完成，点
 
 
 class ScreenPage(ttk.Frame):
-    def __init__(self, parent, *, hide_windows, show_results, configuration, configure_service):
+    def __init__(self, parent, *, hide_windows, show_results, configuration, configure_service, glossary):
         super().__init__(parent, padding=PAGE_PADDING)
         self.hide_windows = hide_windows
         self.show_results = show_results
         self.configuration = configuration
         self.configure_service = configure_service
+        self.glossary = glossary
         self.results = SimpleQueue()
         self.busy = False
         self.last_selection = None
@@ -188,7 +190,7 @@ class ScreenPage(ttk.Frame):
             self.status.set(f"本次最多翻译 {MAX_TEXT_LENGTH} 个字符，请缩短原文。")
             return
         self.settings_button.grid_remove()
-        self.run("translation", "正在翻译原文…", translate, text, key, workspace)
+        self.run("translation", "正在翻译原文…", partial(translate, terms=self.glossary()), text, key, workspace)
 
     def run(self, operation, status, work, *args):
         self.busy = True

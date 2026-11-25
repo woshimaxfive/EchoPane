@@ -6,14 +6,15 @@ import tkinter as tk
 import webbrowser
 from functools import partial
 from queue import Empty, SimpleQueue
-from threading import Thread
-from tkinter import font, ttk
+from threading import Event, Thread
+from tkinter import filedialog, font, ttk
 
 import theme
 from capture import AudioSource, window_sources
 from cloud import service_url, test_subtitle_connection
 from credentials import clear_credentials, load_credentials, save_credentials
-from preferences import BACKGROUNDS, CAPTION_MODES, CAPTION_SIZES
+from offline_model import MODEL_BYTES, MODEL_MIB, MODEL_NAME, download_model, import_model_package, model_ready
+from preferences import BACKGROUNDS, CAPTION_MODES, CAPTION_SIZES, load_local_captions, save_local_captions
 from session import Phase
 
 
@@ -121,6 +122,11 @@ class LivePage(ttk.Frame):
         self.rowconfigure(2, weight=1)
         self.sources = {}
         self.source_changed = source_changed
+        self.active = False
+        self.model_events = SimpleQueue()
+        self.model_stop = None
+        self.model_action = ""
+        self.model_message = ""
         page_title(self, LIVE_TITLE)
         self.history_button = ttk.Button(self, text="字幕回看", style="Outline.TButton", command=open_history)
         self.history_button.grid(row=0, column=1, sticky="e")
@@ -143,9 +149,20 @@ class LivePage(ttk.Frame):
         ttk.Label(audio, textvariable=self.meter.reading, style="MeterValue.TLabel", width=5, anchor="e").grid(
             row=3, column=2, sticky="e", pady=(11, 0)
         )
+        engine_row = ttk.Frame(audio, style="Panel.TFrame")
+        engine_row.grid(row=4, columnspan=3, sticky="ew", pady=(13, 0))
+        ttk.Label(engine_row, text="处理方式", style="Panel.TLabel").pack(side="left", padx=(0, 12))
+        self.engine = ttk.Combobox(engine_row, state="readonly", width=11, values=("云端字幕", "本地原文"))
+        self.engine.current(1 if load_local_captions() else 0)
+        self.engine.pack(side="left")
+        self.engine.bind("<<ComboboxSelected>>", self.engine_changed)
+        self.model_button = ttk.Button(engine_row, style="PanelQuiet.TButton", command=self.request_model)
+        self.model_import = ttk.Button(engine_row, text="导入模型包", style="PanelQuiet.TButton",
+                                      command=self.choose_model_package)
         self.notice = ttk.Label(self, text=WINDOW_AUDIO_NOTICE, style="Hint.TLabel", wraplength=400)
         self.notice.grid(row=2, columnspan=2, sticky="sew", pady=(10, 0))
         wrap_label(self.notice)
+        self.update_model_controls()
 
     def refresh(self):
         system = self.system_audio_selected()
@@ -159,8 +176,113 @@ class LivePage(ttk.Frame):
         self.notify_source_changed()
 
     def notify_source_changed(self, _event=None):
-        self.notice.configure(text=SYSTEM_AUDIO_NOTICE if self.system_audio_selected() else WINDOW_AUDIO_NOTICE)
+        self.update_model_controls()
         self.source_changed()
+
+    @property
+    def local_selected(self):
+        return self.engine.current() == 1
+
+    def engine_changed(self, _event=None):
+        try:
+            save_local_captions(self.local_selected)
+        except OSError:
+            pass
+        self.notify_source_changed()
+
+    def update_model_controls(self):
+        if self.local_selected:
+            self.model_button.pack(side="right", padx=(8, 0))
+            self.model_import.pack(side="right", padx=(8, 0))
+            working = self.model_stop is not None
+            cancelling = working and self.model_stop.is_set()
+            if cancelling:
+                label = "正在停止…"
+            elif working:
+                label = "暂停下载" if self.model_action == "下载" else "取消导入"
+            else:
+                label = "校验或修复" if model_ready() else f"下载模型 · {MODEL_MIB} MiB"
+            self.model_button.configure(text=label)
+            self.model_button.state(["disabled"] if self.active or cancelling else ["!disabled"])
+            self.model_import.state(["disabled"] if self.active or working else ["!disabled"])
+            text = self.model_message or f"{MODEL_NAME} 在本机处理音频，生成原文字幕。"
+        else:
+            self.model_button.pack_forget()
+            self.model_import.pack_forget()
+            text = SYSTEM_AUDIO_NOTICE if self.system_audio_selected() else WINDOW_AUDIO_NOTICE
+        self.notice.configure(text=text)
+
+    def choose_model_package(self):
+        package = filedialog.askopenfilename(
+            parent=self.winfo_toplevel(), title="选择 EchoPane 模型包", filetypes=(("模型包", "*.zip"),)
+        )
+        if package:
+            self.request_model(package)
+
+    def request_model(self, package=None):
+        if self.model_stop is not None:
+            self.stop_model_task()
+            return
+        stop = Event()
+        action = "导入" if package else "下载"
+        self.model_stop = stop
+        self.model_action = action
+        self.model_message = f"正在准备{action}模型…"
+        self.update_model_controls()
+        worker = Thread(target=self.prepare_model, args=(stop, package, action), daemon=True)
+        try:
+            worker.start()
+        except RuntimeError:
+            self.model_stop = None
+            self.model_message = f"无法开始{action}，请重试。"
+            self.update_model_controls()
+            return
+        self.after(80, self.receive_model)
+
+    def stop_model_task(self):
+        if self.model_stop is not None and not self.model_stop.is_set():
+            self.model_stop.set()
+            self.model_message = f"正在停止{self.model_action}模型…"
+            self.update_model_controls()
+
+    def prepare_model(self, stop, package, action):
+        percent = -1
+
+        def progress(received):
+            nonlocal percent
+            next_percent = received * 100 // MODEL_BYTES
+            if next_percent != percent:
+                percent = next_percent
+                self.model_events.put((False, f"模型{action}中 {percent}%"))
+
+        try:
+            if package:
+                import_model_package(package, stop, progress)
+            else:
+                download_model(stop, progress)
+            text = "本地模型已就绪。可断网生成原文字幕。"
+        except RuntimeError as exc:
+            text = str(exc)
+        except OSError:
+            text = f"模型{action}失败，请检查文件权限与磁盘空间。"
+        if stop.is_set():
+            text = "模型下载已暂停，可再次点击下载继续。" if action == "下载" else "模型导入已取消。"
+        self.model_events.put((True, text))
+
+    def receive_model(self):
+        while True:
+            try:
+                done, message = self.model_events.get_nowait()
+            except Empty:
+                self.after(80, self.receive_model)
+                return
+            if done or not self.model_stop.is_set():
+                self.model_message = message
+                self.update_model_controls()
+            if done:
+                self.model_stop = None
+                self.notify_source_changed()
+                return
 
     def system_audio_selected(self):
         return self.source.get() == SYSTEM_AUDIO
@@ -187,8 +309,11 @@ class LivePage(ttk.Frame):
         return partial(AudioSource, source)
 
     def set_active(self, active):
+        self.active = active
         self.source.configure(state="disabled" if active else "readonly")
         self.refresh_button.state(["disabled"] if active else ["!disabled"])
+        self.engine.configure(state="disabled" if active else "readonly")
+        self.update_model_controls()
 
 
 class CaptionPreview(tk.Canvas):
@@ -293,7 +418,7 @@ class CaptionPage(ttk.Frame):
 
 
 class SettingsPage(ttk.Frame):
-    def __init__(self, parent, key_changed, open_shortcuts):
+    def __init__(self, parent, key_changed, open_shortcuts, open_glossary):
         super().__init__(parent, padding=PAGE_PADDING)
         self.columnconfigure(0, weight=1)
         self.notice = tk.StringVar(master=self, value="保存后由 Windows 凭据管理器保管。")
@@ -323,8 +448,13 @@ class SettingsPage(ttk.Frame):
         self.workspace.trace_add("write", input_changed)
 
         page_title(self, "翻译服务")
-        self.shortcuts_button = ttk.Button(self, text="快捷键…", style="Outline.TButton", command=open_shortcuts)
-        self.shortcuts_button.grid(row=0, column=0, sticky="e")
+        settings_actions = ttk.Frame(self)
+        settings_actions.grid(row=0, column=0, sticky="e")
+        self.glossary_button = ttk.Button(settings_actions, text="术语词表…", style="Outline.TButton",
+                                          command=open_glossary)
+        self.glossary_button.pack(side="left", padx=(0, theme.SPACE))
+        self.shortcuts_button = ttk.Button(settings_actions, text="快捷键…", style="Outline.TButton", command=open_shortcuts)
+        self.shortcuts_button.pack(side="left")
         provider = ttk.Frame(self, style="Panel.TFrame", padding=SECTION_PADDING)
         provider.grid(row=1, sticky="ew", pady=SECTION_GAP)
         provider.columnconfigure(0, weight=1)

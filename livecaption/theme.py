@@ -62,9 +62,15 @@ GLYPHS = {
              (6, 5, 7, 10), (7, 6, 9, 9), (9, 7, 11, 8)),
     "captions": ((1, 2, 15, 3), (1, 3, 2, 12), (14, 3, 15, 12), (1, 12, 15, 13),
                  (4, 6, 10, 7), (4, 9, 12, 10)),
+    "web_caption": ((1, 2, 15, 3), (1, 3, 2, 13), (14, 3, 15, 13), (1, 13, 15, 14),
+                    (2, 5, 14, 6), (4, 9, 7, 10), (8, 9, 12, 10), (5, 11, 11, 12)),
     "screen": ((1, 2, 6, 3), (1, 3, 2, 6), (10, 2, 15, 3), (14, 3, 15, 6),
                (1, 10, 2, 13), (1, 13, 6, 14), (14, 10, 15, 13), (10, 13, 15, 14),
                (5, 6, 11, 7), (5, 9, 9, 10)),
+    "subtitle_file": ((3, 1, 10, 2), (3, 2, 4, 14), (10, 2, 11, 5), (10, 4, 14, 5),
+                      (13, 5, 14, 14), (3, 14, 14, 15), (6, 7, 11, 8), (6, 10, 11, 11)),
+    "video": ((1, 2, 15, 3), (1, 3, 2, 13), (14, 3, 15, 13), (1, 13, 15, 14),
+              (4, 3, 5, 13), (11, 3, 12, 13), (2, 7, 4, 8), (12, 7, 14, 8), (6, 9, 10, 10)),
     "usage": ((1, 2, 2, 14), (1, 13, 15, 14), (4, 8, 6, 12), (8, 5, 10, 12), (12, 2, 14, 12)),
     "settings": ((2, 3, 14, 4), (5, 2, 7, 5), (2, 7, 14, 8), (10, 6, 12, 9),
                  (2, 11, 14, 12), (6, 10, 8, 13)),
@@ -366,6 +372,8 @@ def configure(root):
     style.configure("Hint.TLabel", foreground=MUTED, font=(FONT, 9))
     style.configure("PageTitle.TLabel", font=(FONT, 17, "bold"))
     style.configure("MeterValue.TLabel", background=PANEL, foreground=ACCENT, font=("Bahnschrift", 11))
+    style.configure("Subtitle.Horizontal.TProgressbar", background=ACCENT, troughcolor=RAIL,
+                    bordercolor=RAIL, lightcolor=ACCENT, darkcolor=ACCENT, thickness=6)
 
     style.configure("TButton", width=0, padding=(10, 5), relief="flat", borderwidth=1,
                     background=BACKGROUND, bordercolor=BORDER, lightcolor=BACKGROUND, darkcolor=BACKGROUND)

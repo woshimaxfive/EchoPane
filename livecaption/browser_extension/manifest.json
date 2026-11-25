@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "EchoPane 网页字幕",
+  "description": "把当前标签页正在显示的 HTML5 视频字幕交给本机 EchoPane 翻译。",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "scripting"],
+  "background": { "service_worker": "worker.js" },
+  "action": { "default_title": "EchoPane 网页字幕", "default_popup": "popup.html" }
+}

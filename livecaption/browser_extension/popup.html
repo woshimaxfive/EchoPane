@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EchoPane 网页字幕</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+    body { box-sizing: border-box; width: 314px; margin: 0; padding: 16px; }
+    h1 { font-size: 17px; margin: 0 0 12px; }
+    form { display: grid; gap: 8px; }
+    input, button { font: inherit; padding: 8px 10px; border: 1px solid GrayText; border-radius: 7px; }
+    input { min-width: 0; }
+    button { cursor: pointer; }
+    button[type="submit"] { background: #285c85; border-color: #285c85; color: white; }
+    p { min-height: 2.7em; line-height: 1.4; margin: 12px 0 0; }
+    [hidden] { display: none; }
+  </style>
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <h1>EchoPane 网页字幕</h1>
+  <form id="connect">
+    <label for="code">连接码</label>
+    <input id="code" type="password" maxlength="30" required autocomplete="off" spellcheck="false">
+    <button type="submit">连接当前标签页</button>
+  </form>
+  <button id="stop" type="button" hidden>断开连接</button>
+  <p id="status" role="status">从 EchoPane 的「网页字幕」复制连接码。</p>
+</body>
+</html>

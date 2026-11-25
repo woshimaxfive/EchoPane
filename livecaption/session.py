@@ -13,6 +13,8 @@ from uuid import uuid4
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from cloud import LIVE_MODEL, CaptionUpdate, ContentInspectionFailed, subtitles
+from offline_model import MODEL_NAME
+from offline_speech import run_local
 from transcripts import Transcript
 from usage import UsageRecord
 
@@ -20,6 +22,7 @@ from usage import UsageRecord
 AUDIO_LEVEL_THRESHOLD = 0.03
 FIRST_CAPTION_QUIET_SECONDS = 8
 WAITING_FOR_AUDIO = "已连接。等待所选音源发声。"
+LOCAL_WAITING_FOR_AUDIO = "本地模型已就绪。等待所选音源发声。"
 
 
 class Phase(Enum):
@@ -94,32 +97,38 @@ class LiveSession:
         self.last_audio_at = None
         self.captions = {}
         self.caption_mode = "translation"
+        self.local = False
         self.originals = OriginalCaptions()
 
-    def start(self, open_source, key, workspace, *, caption_mode="translation"):
+    def start(self, open_source, key="", workspace="", *, caption_mode="translation", terms=(), local=False):
         if self.state.active:
             return
-        record = UsageRecord(uuid4().hex, time.time(), LIVE_MODEL)
+        record = UsageRecord(uuid4().hex, time.time(), MODEL_NAME if local else LIVE_MODEL)
         usage_start = (record, time.monotonic())
         self.stop_flag = threading.Event()
-        self.state = SessionState(Phase.CONNECTING, "正在连接百炼…")
-        worker = threading.Thread(
-            target=self.run,
-            args=(open_source, key, workspace, self.stop_flag, self.emit),
-            kwargs={"usage_history": self.usage_history, "usage_start": usage_start,
-                    "caption_mode": caption_mode}, daemon=True,
-        )
+        if local:
+            self.state = SessionState(Phase.CONNECTING, "正在准备本地模型…")
+            worker = threading.Thread(target=run_local, args=(open_source, self.stop_flag, self.emit), daemon=True)
+        else:
+            self.state = SessionState(Phase.CONNECTING, "正在连接百炼…")
+            worker = threading.Thread(
+                target=self.run,
+                args=(open_source, key, workspace, self.stop_flag, self.emit),
+                kwargs={"usage_history": self.usage_history, "usage_start": usage_start,
+                        "caption_mode": caption_mode, "terms": terms}, daemon=True,
+            )
         try:
             worker.start()
         except RuntimeError:
-            self.state = SessionState(Phase.INTERRUPTED, "无法开始翻译，请重试。")
+            self.state = SessionState(Phase.INTERRUPTED, "无法开始字幕，请重试。" if local else "无法开始翻译，请重试。")
         else:
             self.usage = None
             self.usage_save_failed = False
             self.usage_start = usage_start
             self.finished_at = None
             self.captions.clear()
-            self.caption_mode = caption_mode
+            self.local = local
+            self.caption_mode = "original" if local else caption_mode
             self.originals = OriginalCaptions()
 
     def emit(self, kind, data):
@@ -128,7 +137,9 @@ class LiveSession:
     def stop(self):
         if self.state.active and self.state.phase is not Phase.STOPPING:
             self.stop_flag.set()
-            message = "正在取消连接…" if self.state.phase is Phase.CONNECTING else "正在接收最后一段字幕…"
+            message = "正在接收最后一段字幕…"
+            if self.state.phase is Phase.CONNECTING:
+                message = "正在取消启动…" if self.local else "正在取消连接…"
             self.state = replace(self.state, phase=Phase.STOPPING, message=message)
 
     def reset(self):
@@ -183,11 +194,12 @@ class LiveSession:
 
     def current_usage(self):
         record = self.transcript_record
-        if self.state.active and record is not None:
+        if self.state.active and not self.local and record is not None:
             return record.snapshot(self.elapsed(), self.usage)
 
     def poll(self):
         """Handle worker events on the UI thread and yield changes for the workspace."""
+        waiting = LOCAL_WAITING_FOR_AUDIO if self.local else WAITING_FOR_AUDIO
         for _ in range(64):
             try:
                 kind, data = self.events.get_nowait()
@@ -197,7 +209,7 @@ class LiveSession:
             phase = self.state.phase
             if kind == "status" and phase is Phase.CONNECTING:
                 self.last_audio_at = None
-                self.state = replace(self.state, phase=Phase.WAITING, message=WAITING_FOR_AUDIO)
+                self.state = replace(self.state, phase=Phase.WAITING, message=waiting)
             elif kind == "level" and phase is not Phase.STOPPING:
                 now = time.monotonic()
                 message = self.state.message
@@ -208,7 +220,7 @@ class LiveSession:
                         phase, message = Phase.LISTENING, f"已收到声音，等待首条{first_caption}。"
                 elif (phase is Phase.LISTENING and self.last_audio_at is not None
                       and now - self.last_audio_at >= FIRST_CAPTION_QUIET_SECONDS):
-                    phase, message = Phase.WAITING, WAITING_FOR_AUDIO
+                    phase, message = Phase.WAITING, waiting
                 self.state = replace(self.state, phase=phase, message=message, level=data)
             elif kind == "caption":
                 previous = self.captions.get(data.ident)
@@ -218,7 +230,8 @@ class LiveSession:
                     continue
                 caption_phase = Phase.RECOGNIZING if self.caption_mode == "original" else Phase.TRANSLATING
                 if self.state.active and phase not in (Phase.STOPPING, caption_phase):
-                    self.state = replace(self.state, phase=caption_phase, message="字幕显示在桌面浮窗。")
+                    detail = "本地原文显示在桌面浮窗。" if self.local else "字幕显示在桌面浮窗。"
+                    self.state = replace(self.state, phase=caption_phase, message=detail)
                 first_shown = previous.first_shown if previous else self.elapsed()
                 self.captions[data.ident] = TranscriptCaption(data.text, data.final, first_shown)
                 yield kind, data
@@ -256,7 +269,7 @@ class LiveSession:
 
     @staticmethod
     def run(open_source, key, workspace, stop, emit, *, usage_history=None, usage_start=None,
-            caption_mode="translation"):
+            caption_mode="translation", terms=()):
         end_event = "end"
         error = ""
         latest_usage = None
@@ -272,7 +285,7 @@ class LiveSession:
             emit(kind, data)
 
         try:
-            asyncio.run(subtitles(open_source, key, workspace, stop, forward, caption_mode=caption_mode))
+            asyncio.run(subtitles(open_source, key, workspace, stop, forward, caption_mode=caption_mode, terms=terms))
         except ContentInspectionFailed:
             end_event = "content_blocked"
             error = "百炼内容审核中断，字幕已停止。请等当前片段结束或切换音源后重新开始。"
