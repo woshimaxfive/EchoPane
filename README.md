@@ -2,7 +2,7 @@
 
 EchoPane 是面向 Windows 的实时字幕和屏幕翻译工具。选择播放窗口或 Windows 默认播放设备上的系统声音，就能在桌面浮窗里看原文、中文字幕或双语字幕。回看支持按场次查找关键词，字幕可保存在本机并导出 TXT 或 SRT。
 
-[下载 0.2.39 安装包（Windows 11 x64）](https://github.com/woshimaxfive/EchoPane/releases/download/v0.2.39/EchoPane-0.2.39-win-x64.msi) · [预览版说明与校验清单](https://github.com/woshimaxfive/EchoPane/releases/tag/v0.2.39) · [问题反馈](https://github.com/woshimaxfive/EchoPane/issues)
+[下载 0.2.40 安装包（Windows 11 x64）](https://github.com/woshimaxfive/EchoPane/releases/download/v0.2.40/EchoPane-0.2.40-win-x64.msi) · [预览版说明与校验清单](https://github.com/woshimaxfive/EchoPane/releases/tag/v0.2.40) · [问题反馈](https://github.com/woshimaxfive/EchoPane/issues)
 
 ## 开始使用
 
