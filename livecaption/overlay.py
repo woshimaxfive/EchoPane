@@ -470,7 +470,9 @@ class CaptionOverlay(tk.Toplevel):
         max_rows = max(1, available_height // spacing)
         current = self.fit_rows("current", latest, self.caption_font, text_limit, max_rows)
         text_height = (current.count("\n") + 1) * spacing
-        previous_rows = (available_height - text_height - self.gap) // previous_spacing
+        # Fit the original into the half-height budget after reserving the translation.
+        combined_text_limit = min(available_height, work_height // 2) if show_original else available_height
+        previous_rows = (combined_text_limit - text_height - self.gap) // previous_spacing
         if not show_original:
             previous_rows = min(2, previous_rows)
         previous = self.fit_rows("previous", earlier, self.previous_font, text_limit,
