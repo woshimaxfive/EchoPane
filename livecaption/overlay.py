@@ -407,6 +407,11 @@ class CaptionOverlay(tk.Toplevel):
             last = rows[-2][-1]
             if 0x4E00 <= ord(last) <= 0x9FFF:
                 rows[-2], rows[-1] = rows[-2][:-1], last + rows[-1]
+        if first_row:
+            first = rows[0]
+            while first and text_font.measure(f"…{first}") > width:
+                first = first[1:]
+            rows[0] = f"…{first.lstrip()}"
         return "\n".join(rows)
 
     def position_text(self, tag, items, text, x, bottom):
@@ -447,31 +452,37 @@ class CaptionOverlay(tk.Toplevel):
         pad = self.padding
         limit = work.right - work.left - 2 * inset
         text_limit = max(1, limit - 2 * pad)
-        header = self.controls.winfo_reqheight() + 2 * self.gap
+        reserved_height = self.controls.winfo_reqheight() + 4 * self.gap
         spacing = self.caption_font.metrics("linespace")
         previous_spacing = self.previous_font.metrics("linespace")
-        available_height = work.bottom - work.top - 2 * inset - header - 2 * self.gap
+        work_height = work.bottom - work.top - 2 * inset
+        # Reserve part of the work area for the video even when both tracks are long.
+        height_limit = min(work_height, max(work_height * 4 // 5, reserved_height + spacing))
+        available_height = height_limit - reserved_height
         captions = list(self.lines.values())
         latest = captions[-1] if captions else self.status_message
         earlier = captions[-2] if len(captions) > 1 else ""
-        if self.original is not None:
+        show_original = self.original is not None and not self.interruption
+        if show_original:
             earlier = self.original
         if self.interruption:
             latest, earlier = self.interruption, captions[-1] if captions else ""
-        max_rows = max(1, min(4, available_height // spacing))
+        max_rows = max(1, available_height // spacing)
         current = self.fit_rows("current", latest, self.caption_font, text_limit, max_rows)
         text_height = (current.count("\n") + 1) * spacing
+        previous_rows = (available_height - text_height - self.gap) // previous_spacing
+        if not show_original:
+            previous_rows = min(2, previous_rows)
         previous = self.fit_rows("previous", earlier, self.previous_font, text_limit,
-                                 min(2, (available_height - text_height - self.gap) // previous_spacing),
-                                 keep_tail=self.original is not None and not self.interruption)
-        height = header + text_height + 2 * self.gap
+                                 previous_rows, keep_tail=show_original)
+        height = reserved_height + text_height
         if previous:
             height += (previous.count("\n") + 1) * previous_spacing + self.gap
         current_width = max(self.caption_font.measure(row) for row in current.split("\n"))
         previous_width = max(self.previous_font.measure(row) for row in previous.split("\n"))
         width = min(limit, max(current_width, previous_width, self.controls.winfo_reqwidth()) + 2 * pad)
         self.content_height = height
-        width, height = self.panel_size(width, height, limit, max(height, work.bottom - work.top - 2 * inset))
+        width, height = self.panel_size(width, height, limit, max(height, height_limit))
 
         screen_left, screen_right = work.left + inset, work.right - inset
         center_x = width // 2
