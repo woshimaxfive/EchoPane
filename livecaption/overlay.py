@@ -352,9 +352,13 @@ class CaptionOverlay(tk.Toplevel):
         self.schedule_watch()
 
     def show_interruption(self, label):
-        self.interruption = label
-        self.schedule_watch()
+        self.set_notice(label)
         self.reveal()
+
+    def set_notice(self, label):
+        if self.interruption != label:
+            self.interruption = label
+            self.schedule_watch()
 
     def update_caption(self, ident, text):
         lines = self.lines | {ident: text}

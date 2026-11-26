@@ -32,6 +32,7 @@ class Phase(Enum):
     LISTENING = "正在收音"
     TRANSLATING = "正在翻译"
     RECOGNIZING = "正在识别"
+    RECONNECTING = "正在重连"
     STOPPING = "正在停止"
     STOPPED = "已停止"
     INTERRUPTED = "已中断"
@@ -140,6 +141,8 @@ class LiveSession:
             message = "正在接收最后一段字幕…"
             if self.state.phase is Phase.CONNECTING:
                 message = "正在取消启动…" if self.local else "正在取消连接…"
+            elif self.state.phase is Phase.RECONNECTING:
+                message = "正在取消重连…"
             self.state = replace(self.state, phase=Phase.STOPPING, message=message)
 
     def reset(self):
@@ -207,9 +210,15 @@ class LiveSession:
                 return
 
             phase = self.state.phase
-            if kind == "status" and phase is Phase.CONNECTING:
+            if kind == "status" and phase in (Phase.CONNECTING, Phase.RECONNECTING):
                 self.last_audio_at = None
                 self.state = replace(self.state, phase=Phase.WAITING, message=waiting)
+                if phase is Phase.RECONNECTING:
+                    yield "reconnected", None
+            elif kind == "reconnecting" and phase is not Phase.STOPPING:
+                attempt, limit = data
+                self.state = SessionState(Phase.RECONNECTING, f"与百炼的连接中断，正在尝试第 {attempt}/{limit} 次重连…")
+                yield kind, data
             elif kind == "level" and phase is not Phase.STOPPING:
                 now = time.monotonic()
                 message = self.state.message
@@ -250,7 +259,7 @@ class LiveSession:
                 message = data or "已停止。"
                 if self.usage is not None:
                     audio, text = self.usage
-                    message += f" 百炼用量（Token） 音频输入 {audio}，文本输出 {text}。"
+                    message += f" 百炼已返回用量（Token） 音频输入 {audio}，文本输出 {text}。"
                 if self.usage_save_failed:
                     message += " 本次用量保存失败。"
                 self.finished_at = time.monotonic()
@@ -273,15 +282,26 @@ class LiveSession:
         end_event = "end"
         error = ""
         latest_usage = None
+        previous_audio, previous_text = 0, 0
         capturing = False
+        connection = 1
 
         def forward(kind, data):
-            nonlocal latest_usage, capturing
+            nonlocal latest_usage, previous_audio, previous_text, capturing, connection
             if kind == "status":
                 capturing = True
+            elif kind == "reconnecting":
+                previous_audio, previous_text = latest_usage or (0, 0)
+                connection += 1
             elif kind == "usage":
                 # Every response reports the cumulative usage for this connection.
-                latest_usage = data
+                audio, text = data
+                latest_usage = data = (previous_audio + audio, previous_text + text)
+            elif kind in ("caption", "original"):
+                data = data._replace(ident=f"{connection}:{data.ident}")
+            elif kind == "caption_link":
+                translation, original = data
+                data = (f"{connection}:{translation}", f"{connection}:{original}")
             emit(kind, data)
 
         try:

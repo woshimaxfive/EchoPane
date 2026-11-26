@@ -4,16 +4,22 @@ import base64
 import json
 import re
 import time
+from contextlib import AsyncExitStack
 from socket import gaierror
+from ssl import SSLError
 from typing import NamedTuple
 
-from websockets.asyncio.client import connect
+from websockets.asyncio.client import connect, process_exception
 from websockets.exceptions import ConnectionClosed, InvalidStatus, WebSocketException
 
 from capture import pcm_level
 
 
 LIVE_MODEL = "qwen3.5-livetranslate-flash-realtime"
+RECONNECT_DELAYS = (0.6, 1.5, 3.0)
+RECONNECT_SETUP_TIMEOUT = 6
+RECONNECT_RESET_SECONDS = 15
+RECONNECT_CLOSE_CODES = {1000, 1001, 1005, 1011, 1012, 1013, 1014}
 
 
 class ContentInspectionFailed(RuntimeError):
@@ -24,6 +30,10 @@ class ServiceEventError(RuntimeError):
     def __init__(self, code):
         self.code = code
         super().__init__(f"百炼返回错误（{code}）。")
+
+
+class AudioSendTimeout(TimeoutError):
+    """The WebSocket stopped accepting audio."""
 
 
 class CaptionUpdate(NamedTuple):
@@ -125,36 +135,75 @@ async def test_subtitle_connection(key, workspace):
     return "连接成功，百炼已接受实时字幕配置。"
 
 
+def can_reconnect(exc, ready):
+    if isinstance(exc, ConnectionClosed):
+        return all(frame is None or frame.code in RECONNECT_CLOSE_CODES for frame in (exc.rcvd, exc.sent))
+    if isinstance(exc, AudioSendTimeout):
+        return True
+    return not ready and not isinstance(exc, SSLError) and process_exception(exc) is None
+
+
 async def subtitles(open_source, key, workspace, stop, emit, *, caption_mode="translation", terms=()):
+    retries = 0
     ready = False
+    capture_started = None
+    had_capture = False
+
+    def capture_event(kind, data):
+        nonlocal capture_started, had_capture
+        if kind == "status":
+            capture_started = time.monotonic()
+            had_capture = True
+        emit(kind, data)
 
     async def run_session():
         nonlocal ready
-        async with subtitle_connection(key, workspace) as ws:
-            await expect(ws, "session.created")
-            if stop.is_set():
-                return
-            await configure_subtitles(ws, caption_mode, terms=terms)
-            if stop.is_set():
-                return
+        async with AsyncExitStack() as stack:
+            async with asyncio.timeout(RECONNECT_SETUP_TIMEOUT if retries else None):
+                ws = await stack.enter_async_context(subtitle_connection(key, workspace))
+                await expect(ws, "session.created")
+                if stop.is_set():
+                    return
+                await configure_subtitles(ws, caption_mode, terms=terms)
+                if stop.is_set():
+                    return
             ready = True
-            await stream(ws, open_source, stop, emit, caption_mode=caption_mode)
+            await stream(ws, open_source, stop, capture_event, caption_mode=caption_mode)
 
-    if stop.is_set():
-        return
-    connection = asyncio.create_task(run_session())
-    try:
-        # A stop during setup cancels the connection. Once streaming starts,
-        # send session.finish so the final caption can still arrive.
-        while not ready and not connection.done():
-            if stop.is_set():
+    async def connect_once():
+        connection = asyncio.create_task(run_session())
+        try:
+            # Once streaming starts, a stop sends session.finish and waits for the final caption.
+            while not ready and not connection.done():
+                if stop.is_set():
+                    return
+                await asyncio.sleep(0.05)
+            await connection
+        finally:
+            if not connection.done():
+                connection.cancel()
+                await asyncio.gather(connection, return_exceptions=True)
+
+    while not stop.is_set():
+        ready = False
+        capture_started = None
+        try:
+            await connect_once()
+            return
+        except Exception as exc:
+            if stop.is_set() and not ready:
                 return
-            await asyncio.sleep(0.05)
-        await connection
-    finally:
-        if not connection.done():
-            connection.cancel()
-            await asyncio.gather(connection, return_exceptions=True)
+            if stop.is_set() or not had_capture or not can_reconnect(exc, ready):
+                raise
+            if capture_started is not None and time.monotonic() - capture_started >= RECONNECT_RESET_SECONDS:
+                retries = 0
+            if retries == len(RECONNECT_DELAYS):
+                raise RuntimeError("自动重连未成功，请检查网络后重新开始。") from exc
+        delay = RECONNECT_DELAYS[retries]
+        retries += 1
+        emit("reconnecting", (retries, len(RECONNECT_DELAYS)))
+        if await asyncio.to_thread(stop.wait, delay):
+            return
 
 
 def emit_caption(event, emit, *, caption_mode="translation"):
@@ -219,13 +268,16 @@ async def stream(ws, open_source, stop, emit, *, caption_mode="translation"):
             await send_chunk(bytes(pending))
 
     async def send_chunk(chunk):
-        async with asyncio.timeout(4):
-            await ws.send(json.dumps({"type": "input_audio_buffer.append",
-                                      "audio": base64.b64encode(chunk).decode("ascii")}))
+        try:
+            async with asyncio.timeout(4):
+                await ws.send(json.dumps({"type": "input_audio_buffer.append",
+                                          "audio": base64.b64encode(chunk).decode("ascii")}))
+        except TimeoutError as exc:
+            raise AudioSendTimeout("音频发送超时，请检查网络后重试。") from exc
 
     async def receive():
-        async for message in ws:
-            event = json.loads(message)
+        while True:
+            event = json.loads(await ws.recv())
             check_event(event)
             kind = event.get("type")
             if kind == "response.done":
@@ -241,17 +293,23 @@ async def stream(ws, open_source, stop, emit, *, caption_mode="translation"):
                 return
             else:
                 emit_caption(event, emit, caption_mode=caption_mode)
-        raise RuntimeError("翻译连接已经关闭。")
 
     sender = asyncio.create_task(send_audio())
     receiver = asyncio.create_task(receive())
     try:
         done, _ = await asyncio.wait((sender, receiver), return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            task.result()
-        if receiver in done and not stop.is_set():
-            raise RuntimeError("云端已结束本次翻译，请重新开始。")
-        if sender in done and receiver not in done:
+        if receiver in done:
+            receiver.result()
+        if sender in done:
+            try:
+                sender.result()
+            except ConnectionClosed:
+                # Process any receipts or provider errors buffered before the socket closed.
+                await receiver
+        if receiver.done():
+            if not stop.is_set():
+                raise RuntimeError("云端已结束本次翻译，请重新开始。")
+        else:
             async with asyncio.timeout(4):
                 await ws.send('{"type":"session.finish"}')
             await asyncio.wait_for(receiver, timeout=8)

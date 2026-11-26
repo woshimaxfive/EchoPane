@@ -354,6 +354,10 @@ class LiveCaptions:
                     self.history.update_line(data.ident, self.session.caption_text(data.ident))
             elif kind == "usage":
                 usage_changed = True
+            elif kind == "reconnecting":
+                self.overlay.set_notice("正在重连…")
+            elif kind == "reconnected":
+                self.overlay.set_notice("")
             else:
                 usage_finished = True
                 if self.closing:
@@ -376,8 +380,10 @@ class LiveCaptions:
             self.overlay.show_interruption("百炼内容审核中断")
         elif message and self.overlay.lines:
             self.overlay.show_interruption("翻译已中断")
-        elif not self.overlay.lines:
-            self.overlay.hide()
+        else:
+            self.overlay.set_notice("")
+            if not self.overlay.lines:
+                self.overlay.hide()
 
     def history_open(self):
         return self.history is not None and self.history.winfo_exists()
